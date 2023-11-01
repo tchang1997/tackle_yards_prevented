@@ -1,8 +1,10 @@
+from argparse import ArgumentParser
 import os
 import pickle
 
 import numpy as np
 import pandas as pd
+from sklearn.model_selection import train_test_split
 from tqdm.auto import tqdm
 
 tqdm.pandas()
@@ -38,8 +40,8 @@ class NFLBDBDataLoader(object):
 
         self.base_path = base_path
         self.intermediate_data_path = os.path.join(self.base_path, "_play_by_play_intermediate.pkl")
-        self.final_data_path = os.path.join(self.base_path, "play_by_play_features.pkl")
-
+        self.geometric_feature_path = os.path.join(self.base_path, "_play_by_play_geometric_features.pkl")
+        self.final_split_path_stub = os.path.join(self.base_path, "play_by_play")
         print("Dataloader ready.")
 
     def preprocess_intermediate(self):
@@ -101,7 +103,10 @@ class NFLBDBDataLoader(object):
         return self._intermediate
 
     def create_geometric_features(self, include_events=True):
-        self._intermediate = self.preprocess_intermediate()
+        if os.path.isfile(self.geometric_feature_path):
+            print("Geometric features already extracted at", self.geometric_feature_path, "-- reloading.")
+            self.final_geometric_features = pickle.load(open(self.geometric_feature_path, "rb"))
+            return self.final_geometric_features
 
         def get_relative_features_to_ball_carrier(group):
             group_ = group.T.droplevel(0, axis=1)
@@ -155,14 +160,35 @@ class NFLBDBDataLoader(object):
                 "play_features": play_features
             }
             final_features.append({**feature_dict, **play})
+        self.final_geometric_features = final_features
         print("Saving final features data to", self.final_data_path)
         with open(self.final_data_path, 'wb') as f:
-            pickle.dump(final_features, f)
-        return final_features
+            pickle.dump(self.final_geometric_features, f)
+        return self.final_geometric_features
+
+    def make_splits(self, split_names=["train", "val", "test"], split_sizes=[0.7, 0.2, 0.1]):
+        remaining = self.final_geometric_features
+        split_sizes = np.array(split_sizes)
+        for i in range(len(split_names)):
+            if len(split_sizes) > 1:
+                remaining, X_result = train_test_split(remaining, test_size=split_sizes[-1], random_state=i)
+                print(f"Saving split '{split_names[-(i+1)]}' with {len(X_result)} records")
+                with open(self.final_split_path_stub + f"_{split_names[-(i+1)]}.pkl", 'wb') as f:
+                    pickle.dump(X_result, f)
+                split_sizes = split_sizes[:-1] / split_sizes[:-1].sum()
+            else:
+                print(f"Saving split '{split_names[0]}' with {len(remaining)} records")
+                with open(self.final_split_path_stub + f"_{split_names[0]}.pkl", 'wb') as f:
+                    pickle.dump(remaining, f)
 
     def run_full_pipeline(self):
         self.preprocess_intermediate()
         self.create_geometric_features()
+        self.make_splits()
+
+
+
+
 
 if __name__ == '__main__':
     dataloader = NFLBDBDataLoader()

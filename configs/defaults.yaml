@@ -1,0 +1,14 @@
+data:
+  train: "./data/nfl-big-data-bowl-2024/play_by_play_train.pkl"
+  val: "./data/nfl-big-data-bowl-2024/play_by_play_val.pkl"
+  test: "./data/nfl-big-data-bowl-2024/play_by_play_test.pkl"
+dataloader_settings:
+  num_workers: 2
+  batch_size: 8
+  persistent_workers: True
+model_settings:
+  representation_class: "TransformerRepresentor"
+  input_size: 248
+loss_hparams:
+  alpha: 1.0
+  beta: 1.0

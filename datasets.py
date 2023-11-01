@@ -5,11 +5,11 @@ import torch
 from torch.utils.data import Dataset, DataLoader
 from torch.nn.utils.rnn import pad_sequence
 
-PAD_VALUE = 123456789.
+PAD_VALUE = -1.
 TIME_SERIES_KEYS = ["offense_geometric", "offense_raw", "defense_geometric", "defense_raw", "ball_carrier_raw", "event_timeseries"]
 TARGET_KEY = "yards_after_contact"
 TREATMENT_KEY = "tackle_successful"
-STATIC_KEYS = [] # future: play features and on-field player info
+STATIC_KEYS = []  # future: play features and on-field player info
 
 def collate_padded_play_data(batch):
     batchdict = defaultdict(list)
@@ -20,8 +20,13 @@ def collate_padded_play_data(batch):
             elif k in [TARGET_KEY, TREATMENT_KEY]:
                 batchdict[k].append(v)
     X_padded = torch.cat([pad_sequence(batchdict[k], batch_first=True, padding_value=PAD_VALUE) for k in TIME_SERIES_KEYS], dim=2)
-    X_padded_static = torch.tensor()
-    return {"time_series_features": X_padded, "features": X_padded_static, "target": batchdict["yards_after_contact"], "treatment": batchdict["tackle_successful"]}
+    X_padded_static = torch.empty((len(batch), 0))
+    return {
+        "time_series_features": X_padded,
+        "features": X_padded_static,
+        "target": torch.tensor(batchdict[TARGET_KEY], dtype=torch.float),
+        "treatment": torch.tensor(batchdict[TREATMENT_KEY], dtype=torch.float),
+    }
 
 
 class PlayByPlayDataset(Dataset):

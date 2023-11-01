@@ -18,7 +18,7 @@ In a perfect world, we'd have both teams run two identical plays, and in one pla
 
 **Thankfully, the field of causal inference has been dealing with this problem for decades.** In practice, a lot of real-world interventions aren't randomized controlled trials--for example, rolling out a new law or policy and reasoning about if it "worked." But if we're willing to believe a few assumptions [CITE] about the data, we can still get an estimate of what would have happened if a tackle was missed (or not)--even though we don't explicitly observe that outcome.
 
-We use the Double Machine Learning framework from causal inference, in which we train an outcome model (regression for predicting the number of yards after contact), and a propensity model (for predicting the probability of a successful tackle). As baselines, we also benchmark alternative meta-algorithms such as the S-learner, T-learner, and X-learner. We additionally test against neural-network based CATE estimators such as DragonNet [CITE].
+We use a customized version of DragonNet [CITE], which jointly learns propensity scores and effect estimates for each treatment arm (three outputs) from a shared representation. We use a transformer-based encoder-only model that aggregates the time-varying tracking features with play-level features to create this shared representation.
 
 ## Modeling
 
