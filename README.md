@@ -1,6 +1,6 @@
 # Assessing the value of tackles
 
-We've all seen it before -- those touchdown-saving tackles, sacks on 3rd and long, or the running back skirting past the last man down the sidelines. But tackles -- or missed tackles -- occur on every play, and it's not clear how meaningful many of these tackles are.
+We've all seen it before -- those touchdown-saving tackles, sacks on 3rd and long, or the running back skirting past the last man down the sidelines. But tackles -- or missed tackles -- occur on every play. It's not always clear how valuable these tackles or missed opportunities really are.
 
 This project aims to answer the question: "What if he missed the tackle?" Using tools from causal effect estimation, we propose the **Expected Yards Prevented (EYP)** tackle valuation metric: the number of yards that a ball carrier would have gained if a tackle was missed. Conversely, the **Expected Excess Yards Allowed (EEYA)** metric evaluates the number of yards that a tackler would have prevented if a tackle was completed.
 
@@ -22,10 +22,10 @@ We use a customized version of DragonNet [CITE], which jointly learns propensity
 
 ## Modeling
 
-Our outcome and propensity models take in essentially the same covariates, except that the outcome model additionally takes into account whether or not an attempted tackle was successful. As features, inspired by [CITE], we take in (for each play):
+Our outcome and propensity models take in essentially the same covariates, except that the outcome model additionally takes into account whether or not an attempted tackle was successful. As features, inspired by [existing yards-per-rush models](https://www.kaggle.com/competitions/nfl-big-data-bowl-2020/discussion/119357), we take in (for each play):
 * Geometric features (relative distance, speed, and acceleration with respect to ball carrier)  using tracking data for all players up to the time of first contact
 * Absolute tracking features using tracking data up to the time of first contact
 * Player-level information for all players on the field (e.g., height, weight, age)
 * Play/game-level information (e.g., team ID, field position, clock)
 
-We base our models on a simplified version of the BERT transformer architecture often used in sentence classification settings. We hypothesize that its capabilities extend to general sequence classification.
+Geometric features have been empirically shown in past NFL big data bowls to carry relevance for prediction tasks relating to yards gained [CITE]. We base our models on a simplified version of the BERT transformer architecture often used in sentence classification settings. We hypothesize that its capabilities extend to general sequence/time-series classification/regression tasks.

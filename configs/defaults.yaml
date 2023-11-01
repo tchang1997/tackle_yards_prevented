@@ -12,3 +12,26 @@ model_settings:
 loss_hparams:
   alpha: 1.0
   beta: 1.0
+optimizer_settings:
+  name: "Adam"
+  params:
+    lr: 1.0e-6
+trainer_args:
+  num_sanity_val_steps: 2
+  overfit_batches: 8
+  max_epochs: 100
+  log_every_n_steps: 10
+callbacks:
+  #- name: "EarlyStopping" -- this is disabled for debugging by default, but here is something to copy-paste.
+  #  params: 
+  #    monitor: "val/loss_total_tarreg"
+  #    mode: "min"
+  #    min_delta: 1.0e-8
+  #    patience: 10
+  #    verbose: True
+  - name: "ModelCheckpoint"
+    params:
+      save_top_k: 1
+      monitor: "global_step"
+      mode: "max"
+      filename: "model-{epoch:02d}-{global_step}"
