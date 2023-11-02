@@ -151,12 +151,16 @@ class NFLBDBDataLoader(object):
             offense_raw = tracking_data.loc[:, pd.IndexSlice[offense]]
             defense_raw = tracking_data.loc[:, pd.IndexSlice[defense]]
 
+            tacklers = onfield.loc[(onfield["tackle"] > 0) | (onfield["assist"] > 0)].nflId
+            tackler_tracking_data = defense_raw.loc[:, pd.IndexSlice[tacklers.tolist(), :]]
+
             feature_dict = {
                 "offense_geometric": offense_features,
                 "defense_geometric": defense_features,
                 "offense_raw": offense_raw,
                 "defense_raw": defense_raw,
                 "ball_carrier_raw": ball_carrier_tracking_data,
+                "tacklers_raw": tackler_tracking_data,
                 "play_features": play_features
             }
             final_features.append({**feature_dict, **play})

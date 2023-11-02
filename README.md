@@ -24,7 +24,7 @@ We use a customized version of DragonNet [CITE], which jointly learns propensity
 
 Our outcome and propensity models take in essentially the same covariates, except that the outcome model additionally takes into account whether or not an attempted tackle was successful. As features, inspired by [existing yards-per-rush models](https://www.kaggle.com/competitions/nfl-big-data-bowl-2020/discussion/119357), we take in (for each play):
 * Geometric features (relative distance, speed, and acceleration with respect to ball carrier)  using tracking data for all players up to the time of first contact
-* Absolute tracking features using tracking data up to the time of first contact
+* Absolute tracking features for the ball carrier and tacklers using tracking data up to the time of first contact
 * Player-level information for all players on the field (e.g., height, weight, age)
 * Play/game-level information (e.g., team ID, field position, clock)
 

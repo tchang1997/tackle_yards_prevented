@@ -1,4 +1,5 @@
 from argparse import ArgumentParser
+import os
 
 import lightning.pytorch as pl
 import lightning.pytorch.callbacks
@@ -19,11 +20,12 @@ from utils import get_default_text_spinner_context
 np.random.seed(42)
 torch.manual_seed(42)
 class BaseCounterfactualTackleTrainer(pl.LightningModule):
-    def __init__(self, model, loss_hparams, optimizer_settings):
+    def __init__(self, model, loss_hparams, optimizer_settings, scheduler_settings=None):
         super().__init__()
         self.model = model
         self.loss_hparams = loss_hparams
         self.optimizer_settings = optimizer_settings
+        self.scheduler_settings = scheduler_settings
 
     def training_step(self, batch, batch_idx):
         t_true = batch["treatment"]
@@ -88,9 +90,19 @@ class BaseCounterfactualTackleTrainer(pl.LightningModule):
             return loss_record["loss_total"]
 
     def configure_optimizers(self):
-        # default: Adam with lr 1e-4
         optimizer = getattr(optim, self.optimizer_settings["name"])(self.parameters(), **self.optimizer_settings["params"])
-        return optimizer
+        if self.scheduler_settings is None:
+            # default: Adam with lr 1e-4
+            return optimizer
+        else:
+            lr_scheduler = getattr(optim.lr_scheduler, self.scheduler_settings["name"])(optimizer, **self.scheduler_settings["params"])
+            return {
+                "optimizer": optimizer,
+                "lr_scheduler": {
+                    "scheduler": lr_scheduler,
+                    **self.scheduler_settings["lightning_params"],
+                }
+            }
 
 def get_callbacks(cfg):
     return [
@@ -113,13 +125,6 @@ if __name__ == '__main__':
         print("Using configuration file", args.config, f"(overriding {DEFAULT_CONFIG_PATH})")
     print(yaml.dump(cfg, allow_unicode=True, default_flow_style=False))
 
-    dataloaders = {}
-    for split, path in cfg["data"].items():
-        with get_default_text_spinner_context(f"Loading {split} split from {path}...") as spinner:
-            dataset = PlayByPlayDataset(path)
-            dataloaders[split] = DataLoader(dataset, collate_fn=collate_padded_play_data, **cfg["dataloader_settings"])
-            spinner.ok(f"✅ ({len(dataset)} examples)")
-
     with get_default_text_spinner_context("Initializing model...") as spinner:
         model_settings = cfg["model_settings"]
         dragonnet_model = DragonNet(
@@ -129,15 +134,38 @@ if __name__ == '__main__':
         spinner.ok("✅ ")
 
     with get_default_text_spinner_context("Setting up trainer...") as spinner:
+        logger = TensorBoardLogger(**cfg["logger"])
         trainer = pl.Trainer(
-            logger=TensorBoardLogger(**cfg["logger"]),
+            logger=logger,
             callbacks=get_callbacks(cfg),
             **cfg["trainer_args"]
         )
-        wrapped_module = BaseCounterfactualTackleTrainer(dragonnet_model, cfg["loss_hparams"], cfg["optimizer_settings"])
+        wrapped_module = BaseCounterfactualTackleTrainer(
+            dragonnet_model,
+            cfg["loss_hparams"],
+            cfg["optimizer_settings"],
+            scheduler_settings=cfg.get("scheduler_settings", None)
+        )
         spinner.ok("✅ ")
-    trainer.fit(
-        model=wrapped_module,
-        train_dataloaders=dataloaders["train"],
-        val_dataloaders=dataloaders["val"]
-    )
+
+    dataloaders = {}
+    for split, path in cfg["data"].items():
+        with get_default_text_spinner_context(f"Loading {split} split from {path}...") as spinner:
+            dataset = PlayByPlayDataset(path)
+            dataloaders[split] = DataLoader(dataset, collate_fn=collate_padded_play_data, **cfg["dataloader_settings"])
+            spinner.ok(f"✅ ({len(dataset)} examples)")
+
+    try:
+        trainer.fit(
+            model=wrapped_module,
+            train_dataloaders=dataloaders["train"],
+            val_dataloaders=dataloaders["val"]
+        )
+    except Exception as e:
+        print("Raised exception", e, "in training")
+    finally:
+        with get_default_text_spinner_context("Saving config...") as spinner:
+            final_config_path = os.path.join(logger.log_dir, "config.yml")
+            with open(final_config_path, "w") as f:
+                yaml.dump(cfg, f, default_flow_style=False)
+            spinner.ok(f"✅ (saved at {final_config_path})")
