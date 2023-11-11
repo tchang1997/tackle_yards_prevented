@@ -15,7 +15,9 @@ PLAYS_RELEVANT_COLS = ['ballCarrierId', 'ballCarrierDisplayName', 'quarter', 'do
 RELEVANT_EVENTS = ["first_contact", "ball_snap", "pass_outcome_caught", "handoff", "pass_arrived", "out_of_bounds", "run", "man_in_motion", "play_action", "touchdown", "fumble"]
 RELEVANT_GAME_INFO = ["gameId", "playId", "displayName", "time", "club"]
 RELEVANT_PLAYER_PLAY_INFO = ["x", "y", "s", "a", "o", "dir"]
-
+YARDAGE_BINS = [0, 3, 7, 10, 100]
+YARDAGE_CATEGORIES = ["short", "medium", "long", "very_long"]
+DEFENDERS_IN_BOX_BINS = [0, 4, 5, 6, 7, 8, 12]
 class NFLBDBDataLoader(object):
     def __init__(self, base_path="./data/nfl-big-data-bowl-2024", weeks=[1, 2, 3, 4, 5, 6, 7, 8, 9]):
 
@@ -26,7 +28,7 @@ class NFLBDBDataLoader(object):
         self.plays = pd.read_csv(os.path.join(base_path, "plays.csv"))
 
         print("Loading player info...")
-        self.players = pd.read_csv(os.path.join(base_path, "players.csv")).drop("displayName",axis=1)
+        self.players = pd.read_csv(os.path.join(base_path, "players.csv")).drop("displayName", axis=1)
 
         print("Loading tracking data (this could take a while)...")
         self.weeks = weeks
@@ -43,6 +45,34 @@ class NFLBDBDataLoader(object):
         self.geometric_feature_path = os.path.join(self.base_path, "_play_by_play_geometric_features.pkl")
         self.final_split_path_stub = os.path.join(self.base_path, "play_by_play")
         print("Dataloader ready.")
+
+    def encode_play_features(self):
+        quarter = pd.get_dummies(self.non_penalty_plays["quarter"], prefix="Q", prefix_sep="").rename(columns={"Q5": "OT"}).astype(int)
+        down = pd.get_dummies(self.non_penalty_plays["down"], prefix="down").astype(int)
+        yardage = pd.get_dummies(pd.cut(self.non_penalty_plays["yardsToGo"], bins=YARDAGE_BINS, right=True, include_lowest=True, labels=YARDAGE_CATEGORIES), prefix="yardage").astype(int)
+
+        time = self.non_penalty_plays["gameClock"].str.split(":", expand=True)
+        time_remaining = pd.Series(time.loc[:, 0].astype(int) + time.loc[:, 1].astype(int) / 60., name="time")
+
+        home_team_has_the_ball = (self.non_penalty_plays["possessionTeam"] == self.non_penalty_plays["homeTeamAbbr"])
+        possession_team_score = self.non_penalty_plays["preSnapHomeScore"].where(home_team_has_the_ball, self.non_penalty_plays["preSnapVisitorScore"])
+        defensive_team_score = self.non_penalty_plays["preSnapVisitorScore"].where(home_team_has_the_ball, self.non_penalty_plays["preSnapHomeScore"])
+        possession_team_deficit = possession_team_score - defensive_team_score
+
+        formation = pd.get_dummies(self.non_penalty_plays["offenseFormation"], prefix="formation").astype(int)
+        defenders_in_box = pd.get_dummies(pd.cut(self.non_penalty_plays["defendersInTheBox"].fillna(-1), bins=DEFENDERS_IN_BOX_BINS, right=True), prefix="n_def_in_box").astype(int)
+
+        self._play_features = pd.concat([
+            quarter,
+            down,
+            yardage,
+            time_remaining,
+            possession_team_score,
+            defensive_team_score,
+            possession_team_deficit,
+            formation,
+            defenders_in_box], axis=1)
+        return self._play_features
 
     def preprocess_intermediate(self):
 
@@ -75,11 +105,13 @@ class NFLBDBDataLoader(object):
 
                 # yards after first_contact
                 play_features = self.non_penalty_plays.loc[(game_id, play_id), PLAYS_RELEVANT_COLS]
+                # play_features_with_game_data = pd.merge(play_features, self.games, how="left", on="gameId")
                 direction = 2 * int(first_group["playDirection"].iloc[0] == "right") - 1
                 ball_carrier_trajectory = play_timeseries.xs(play_features.ballCarrierId, axis=1)
                 yds_at_first_contact = ball_carrier_trajectory.loc[time_to_first_contact, "x"]
                 yds_final = ball_carrier_trajectory.loc[len(ball_carrier_trajectory) - 1, "x"]
                 outcome = direction * (yds_final - yds_at_first_contact)
+
             except Exception as e:
                 raise RuntimeError(f"During preprocessing of game_id, play_id ({game_id}, {play_id}), the following exception was raised: {e}")
 
@@ -90,6 +122,7 @@ class NFLBDBDataLoader(object):
                 "event_timeseries": event_timeseries_encoded,
                 "players_on_the_field": player_data_for_play_with_tackles,
                 "play_features": play_features,
+                "play_features_encoded": self._play_features.loc[(game_id, play_id)],
                 "tackle_successful": tackle_label,
                 "yards_after_contact": outcome,
             }
@@ -97,7 +130,7 @@ class NFLBDBDataLoader(object):
             .filter(lambda g: ("first_contact" in g["event"].values) and (g.name in self.non_penalty_plays.index) and (g["nflId"].nunique() > 0)) \
             .groupby(["gameId", "playId"]).progress_apply(collect_play_by_play_information)
 
-        print("Saving intermediate data to", self.intermediate_data_path)
+        print("Saving intermediate data to", self.intermediate_data_path, f"({len(self._intermediate)} rows)")
         with open(self.intermediate_data_path, 'wb') as f:
             pickle.dump(self._intermediate, f)
         return self._intermediate
@@ -161,12 +194,11 @@ class NFLBDBDataLoader(object):
                 "defense_raw": defense_raw,
                 "ball_carrier_raw": ball_carrier_tracking_data,
                 "tacklers_raw": tackler_tracking_data,
-                "play_features": play_features
             }
             final_features.append({**feature_dict, **play})
         self.final_geometric_features = final_features
-        print("Saving final features data to", self.final_data_path)
-        with open(self.final_data_path, 'wb') as f:
+        print("Saving final features data to", self.geometric_feature_path)
+        with open(self.geometric_feature_path, 'wb') as f:
             pickle.dump(self.final_geometric_features, f)
         return self.final_geometric_features
 
@@ -186,12 +218,10 @@ class NFLBDBDataLoader(object):
                     pickle.dump(remaining, f)
 
     def run_full_pipeline(self):
+        self.encode_play_features()
         self.preprocess_intermediate()
         self.create_geometric_features()
         self.make_splits()
-
-
-
 
 
 if __name__ == '__main__':

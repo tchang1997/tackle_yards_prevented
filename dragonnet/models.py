@@ -43,8 +43,52 @@ class TransformerRepresentor(nn.Module):
         mask = (X[..., 0] == PAD_VALUE)
         out = self.positional_encoder(X)
         out = self.transformer_encoder(out, src_key_padding_mask=mask)  # dim is (batch_size, time, features)
-        out_pooled, _ = torch.max(out * ~mask.unsqueeze(-1), dim=1)  # TODO: mask this correctly
+        out_pooled, _ = torch.max(out * ~mask.unsqueeze(-1), dim=1)
         return out_pooled
+
+class MultiLevelTransformerRepresentor(nn.Module):
+    def __init__(self,
+        geom_input_dim,
+        ball_carrier_input_dim,
+        tackler_input_dim,
+        geom_n_attention_heads=8,
+        geom_n_encoder_layers=3,
+        ball_carrier_n_attention_heads=8,
+        ball_carrier_n_encoder_layers=3,
+        tackler_n_attention_heads=8,
+        tackler_n_encoder_layers=3,
+    ):
+        super(MultiLevelTransformerRepresentor, self).__init__()
+        self.geometric_transformer = TransformerRepresentor(
+            geom_input_dim,
+            n_attention_heads=geom_n_attention_heads,
+            n_encoder_layers=geom_n_encoder_layers
+        )
+        self.ball_carrier_transformer = TransformerRepresentor(
+            ball_carrier_input_dim,
+            n_attention_heads=ball_carrier_n_attention_heads,
+            n_encoder_layers=ball_carrier_n_encoder_layers
+        )
+        self.tackler_transformer = TransformerRepresentor(
+            tackler_input_dim,
+            n_attention_heads=tackler_n_attention_heads,
+            n_encoder_layers=tackler_n_encoder_layers
+        )
+        self.output_size = geom_input_dim + ball_carrier_input_dim  # ball_carrier_input_dim is equal to tackler_input_dim by assumption here
+
+    def forward(self, X_geometric, X_ball_carrier, X_tacklers, n_tacklers):
+        geometric_out = self.geometric_transformer(X_geometric)
+        ball_carrier_out = self.ball_carrier_transformer(X_ball_carrier)
+        tackler_out = []
+        for X_single_tackler in torch.split(X_tacklers, 1, dim=1):  # (batch_size, max_tacklers_in_batch, *input_dims)
+            single_tackler_out = self.tackler_transformer(X_single_tackler)
+            tackler_out.append(single_tackler_out)
+        tackler_out = torch.stack(tackler_out, dim=1).sum(dim=1) / n_tacklers.reshape(-1, 1, *X_tacklers.size()[:-2])
+        playmakers_out = tackler_out + ball_carrier_out  # (batch_size, n_feats)
+        return torch.cat([playmakers_out, geometric_out], dim=1)
+
+class TransformerRepresentorWithPlayContext(nn.Module):
+    pass
 
 class PositionalEncoding(nn.Module):
     """
