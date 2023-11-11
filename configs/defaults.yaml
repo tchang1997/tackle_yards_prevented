@@ -8,7 +8,7 @@ dataloader_settings:
   persistent_workers: True
 model_settings:
   representation_class: "TransformerRepresentor"
-  input_size: 248
+  input_size: 105 # 248
 loss_hparams:
   alpha: 1.0
   beta: 1.0

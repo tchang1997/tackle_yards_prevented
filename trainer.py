@@ -5,13 +5,14 @@ import lightning.pytorch as pl
 import lightning.pytorch.callbacks
 from lightning.pytorch.loggers import TensorBoardLogger
 import numpy as np
+from sklearn.metrics import roc_auc_score
 import torch
 import torch.nn.functional as F
 import torch.optim as optim
 from torch.utils.data import DataLoader
 import yaml
 
-from datasets import PlayByPlayDataset, collate_padded_play_data
+from datasets import PlayByPlayDataset, COLLATE_FN_DICT
 from dragonnet.losses import tarreg_loss
 import dragonnet.models
 from dragonnet.models import DragonNet, TransformerRepresentor
@@ -65,6 +66,7 @@ class BaseCounterfactualTackleTrainer(pl.LightningModule):
         )
         for loss_key, loss_value in loss_record.items():
             self.log(f"val/{loss_key}", loss_value)
+        self.log(f"val/t_auroc", roc_auc_score(t_true, t_pred))
 
         y0_resid = y_true - y0_pred
         y1_resid = y_true - y1_pred
@@ -128,8 +130,9 @@ if __name__ == '__main__':
     with get_default_text_spinner_context("Initializing model...") as spinner:
         model_settings = cfg["model_settings"]
         dragonnet_model = DragonNet(
-            input_dim=model_settings["input_size"],
+            input_dims=model_settings["input_size"],
             backbone_class=getattr(dragonnet.models, model_settings["representation_class"]),
+            **model_settings.get("model_kwargs", {})
         )
         spinner.ok("✅ ")
 
@@ -152,7 +155,11 @@ if __name__ == '__main__':
     for split, path in cfg["data"].items():
         with get_default_text_spinner_context(f"Loading {split} split from {path}...") as spinner:
             dataset = PlayByPlayDataset(path)
-            dataloaders[split] = DataLoader(dataset, collate_fn=collate_padded_play_data, **cfg["dataloader_settings"])
+            dataloaders[split] = DataLoader(
+                dataset,
+                collate_fn=COLLATE_FN_DICT[model_settings["representation_class"]],
+                **cfg["dataloader_settings"],
+            )
             spinner.ok(f"✅ ({len(dataset)} examples)")
 
     try:
@@ -162,7 +169,10 @@ if __name__ == '__main__':
             val_dataloaders=dataloaders["val"]
         )
     except Exception as e:
+        import traceback
+
         print("Raised exception", e, "in training")
+        traceback.print_tb(e.__traceback__)
     finally:
         with get_default_text_spinner_context("Saving config...") as spinner:
             final_config_path = os.path.join(logger.log_dir, "config.yml")

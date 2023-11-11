@@ -2,8 +2,8 @@ trainer_args:
   max_epochs: 100
   log_every_n_steps: 10
 dataloader_settings:
-  num_workers: 4
-  batch_size: 32
+  num_workers: 2
+  batch_size: 16
   persistent_workers: True
 callbacks:
   - name: "EarlyStopping"
@@ -22,7 +22,7 @@ callbacks:
 logger:
   save_dir: "./lightning_logs"
   name: "dragonnet_baseline"
-  version: "lr_5e-6"
+  version: "lr_5e-6_nongeom"
 optimizer_settings:
   name: "Adam"
   params:

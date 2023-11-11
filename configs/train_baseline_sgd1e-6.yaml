@@ -26,7 +26,7 @@ logger:
 optimizer_settings:
   name: "SGD"
   params:
-    lr: 1.0e-7
+    lr: 1.0e-6
     momentum: 0.9
     nesterov: True
 scheduler_settings:
