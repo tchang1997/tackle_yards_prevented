@@ -10,6 +10,7 @@ import torch
 import torch.nn.functional as F
 import torch.optim as optim
 from torch.utils.data import DataLoader
+import torchmetrics
 import yaml
 
 from datasets import PlayByPlayDataset, COLLATE_FN_DICT
@@ -28,10 +29,15 @@ class BaseCounterfactualTackleTrainer(pl.LightningModule):
         self.optimizer_settings = optimizer_settings
         self.scheduler_settings = scheduler_settings
 
+        self.train_auroc = torchmetrics.AUROC(task="binary")
+        self.val_auroc = torchmetrics.AUROC(task="binary")
+        self.validation_step_outputs = []  # required for on_validation_epoch_end
+
     def training_step(self, batch, batch_idx):
         t_true = batch["treatment"]
         y_true = batch["target"]
-        y0_pred, y1_pred, t_pred, eps = self.model(batch["time_series_features"].float())
+
+        y0_pred, y1_pred, t_pred, eps = self.model(batch["time_series_features"])
         loss_record = tarreg_loss(
             y_true,
             t_true,
@@ -45,6 +51,7 @@ class BaseCounterfactualTackleTrainer(pl.LightningModule):
         for loss_key, loss_value in loss_record.items():
             self.log(f"train/{loss_key}", loss_value)
         self.log("global_step", self.global_step, on_step=False, on_epoch=True)
+        self.train_auroc.update(t_pred, t_true)
         if "loss_total_tarreg" in loss_record:
             return loss_record["loss_total_tarreg"]
         else:
@@ -53,7 +60,7 @@ class BaseCounterfactualTackleTrainer(pl.LightningModule):
     def validation_step(self, batch, batch_idx):   # this is not very DRY of me...but I don't want to mess up any pytorch-lightning stuff under the hood
         t_true = batch["treatment"]
         y_true = batch["target"]
-        y0_pred, y1_pred, t_pred, eps = self.model(batch["time_series_features"].float())
+        y0_pred, y1_pred, t_pred, eps = self.model(batch["time_series_features"])
         loss_record = tarreg_loss(
             y_true,
             t_true,
@@ -66,7 +73,7 @@ class BaseCounterfactualTackleTrainer(pl.LightningModule):
         )
         for loss_key, loss_value in loss_record.items():
             self.log(f"val/{loss_key}", loss_value)
-        self.log(f"val/t_auroc", roc_auc_score(t_true, t_pred))
+        self.val_auroc.update(t_pred, t_true)
 
         y0_resid = y_true - y0_pred
         y1_resid = y_true - y1_pred
@@ -90,6 +97,14 @@ class BaseCounterfactualTackleTrainer(pl.LightningModule):
             return loss_record["loss_total_tarreg"]
         else:
             return loss_record["loss_total"]
+
+    def on_train_epoch_end(self):
+        self.log("train/t_auroc", self.train_auroc.compute())
+        self.train_auroc.reset()
+
+    def on_validation_epoch_end(self):
+        self.log("val/t_auroc", self.val_auroc.compute())
+        self.val_auroc.reset()
 
     def configure_optimizers(self):
         optimizer = getattr(optim, self.optimizer_settings["name"])(self.parameters(), **self.optimizer_settings["params"])

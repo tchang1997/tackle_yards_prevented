@@ -29,9 +29,9 @@ callbacks:
 logger:
   save_dir: "./lightning_logs"
   name: "dragonnet_baseline"
-  version: "lr_1e-5_nongeom"
+  version: "lr_5e-6_absolute_feats"
 optimizer_settings:
   name: "Adam"
   params:
-    lr: 1.0e-5
+    lr: 5.0e-6
   

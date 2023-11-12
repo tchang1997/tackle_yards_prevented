@@ -41,6 +41,7 @@ class TransformerRepresentor(nn.Module):
         self.output_size = embed_dim
 
     def forward(self, X):
+        X = X.float()
         mask = (X[..., 0] == PAD_VALUE)
         out = self.positional_encoder(X)
         out = self.linear_embed(X)
@@ -51,58 +52,70 @@ class TransformerRepresentor(nn.Module):
 class MultiLevelTransformerRepresentor(nn.Module):
     def __init__(self,
         input_dims,
-        embed_dim=128,
+        geom_embed_dim=128,
+        player_embed_dim=16,
         geom_n_attention_heads=8,
         geom_n_encoder_layers=3,
         ball_carrier_n_attention_heads=8,
         ball_carrier_n_encoder_layers=3,
         tackler_n_attention_heads=8,
         tackler_n_encoder_layers=3,
+        M=1e6,
     ):
         super(MultiLevelTransformerRepresentor, self).__init__()
         geom_input_dim, ball_carrier_input_dim, tackler_input_dim = input_dims
-        self.embed_dim = embed_dim
+        self.geom_embed_dim = geom_embed_dim
+        self.player_embed_dim = player_embed_dim
         self.input_dims = input_dims
         self.geometric_transformer = TransformerRepresentor(
             geom_input_dim,
+            embed_dim=geom_embed_dim,
             n_attention_heads=geom_n_attention_heads,
             n_encoder_layers=geom_n_encoder_layers
         )
-        self.geometric_embedder = nn.Linear(geom_input_dim, embed_dim)
 
         self.ball_carrier_transformer = TransformerRepresentor(
             ball_carrier_input_dim,
+            embed_dim=player_embed_dim,
             n_attention_heads=ball_carrier_n_attention_heads,
             n_encoder_layers=ball_carrier_n_encoder_layers
         )
-        self.ball_carrier_embedder = nn.Linear(geom_input_dim, embed_dim)
 
         self.tackler_transformer = TransformerRepresentor(
             tackler_input_dim,
+            embed_dim=player_embed_dim,
             n_attention_heads=tackler_n_attention_heads,
             n_encoder_layers=tackler_n_encoder_layers
         )
-        self.tackler_embedder = nn.Linear(geom_input_dim, embed_dim)
 
-        self.output_size = 3 * embed_dim  # ball_carrier_input_dim is equal to tackler_input_dim by assumption here
+        self.M = M
+        self.output_size = geom_embed_dim + player_embed_dim
 
     def forward(self, batch):
         X_geometric, X_ball_carrier, X_tacklers, n_tacklers = batch
+        X_geometric = X_geometric.float()
+        X_ball_carrier = X_ball_carrier.float()
+        X_tacklers = X_tacklers.float()
+        n_tacklers = n_tacklers.detach().clone()
 
-        geometric_out = self.geometric_embedder(X_geometric)
-        geometric_out = self.geometric_transformer(geometric_out)
-
-        ball_carrier_out = self.ball_carrier_embedder(X_ball_carrier)
-        ball_carrier_out = self.ball_carrier_transformer(ball_carrier_out)
+        geometric_out = self.geometric_transformer(X_geometric)
+        ball_carrier_out = self.ball_carrier_transformer(X_ball_carrier)
 
         tackler_out = []
-        for X_single_tackler in torch.split(X_tacklers, 1, dim=1):  # (batch_size, max_tacklers_in_batch, *input_dims)
-            single_tackler_out = self.tackler_embedder(X_single_tackler)
-            single_tackler_out = self.tackler_transformer(single_tackler_out)
+        for i, X_single_tackler in enumerate(torch.split(X_tacklers, 1, dim=2)):  # (batch_size, time, max_tacklers_in_batch, n_feats)
+            single_tackler_out = self.tackler_transformer(X_single_tackler.squeeze(2))  # (batch_size, time, embed_dim)
             tackler_out.append(single_tackler_out)
-        tackler_out = torch.stack(tackler_out, dim=1).sum(dim=1) / n_tacklers.reshape(-1, 1, *X_tacklers.size()[:-2])
-        playmakers_out = tackler_out + ball_carrier_out  # (batch_size, n_feats)
-        return torch.cat([playmakers_out, geometric_out], dim=1)
+        tackler_mask = F.one_hot(n_tacklers)[:, 1:]
+        final_tackler_mask = (tackler_mask - torch.cumsum(tackler_mask, dim=1) + 1).bool().unsqueeze(1).repeat(1, self.player_embed_dim, 1)  # create a mask using one-hot manipulation
+        tackler_out = torch.stack(tackler_out, dim=2)
+        tacklers_masked = torch.masked.masked_tensor(tackler_out, final_tackler_mask)
+        tacklers_masked_agg = tacklers_masked.sum(dim=2)
+
+        assert torch.all(tacklers_masked_agg.get_mask()).item()
+        absolute_out = tacklers_masked_agg.get_data() + ball_carrier_out  # using .get_data() directly on a masked tensor directly isn't recommended but in this case we know .sum() should reduce them out
+        final_out = torch.cat([absolute_out, geometric_out], dim=1)
+
+        return final_out
 
 class TransformerRepresentorWithPlayContext(nn.Module):
     pass
