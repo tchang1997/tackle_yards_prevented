@@ -60,7 +60,6 @@ class MultiLevelTransformerRepresentor(nn.Module):
         ball_carrier_n_encoder_layers=3,
         tackler_n_attention_heads=8,
         tackler_n_encoder_layers=3,
-        M=1e6,
     ):
         super(MultiLevelTransformerRepresentor, self).__init__()
         geom_input_dim, ball_carrier_input_dim, tackler_input_dim = input_dims
@@ -88,7 +87,6 @@ class MultiLevelTransformerRepresentor(nn.Module):
             n_encoder_layers=tackler_n_encoder_layers
         )
 
-        self.M = M
         self.output_size = geom_embed_dim + player_embed_dim
 
     def forward(self, batch):
@@ -142,6 +140,48 @@ class PositionalEncoding(nn.Module):
     def forward(self, x):
         x = x + self.pe[:, :x.size(1)]
         return self.dropout(x)
+
+class TransformerEncoderLayerWithCrossAttention(nn.TransformerEncoderLayer):
+    """
+        Based on https://pytorch.org/docs/stable/_modules/torch/nn/modules/transformer.html#TransformerEncoderLayer
+        without the checks for usage of FlashAttention.
+    """
+    def forward(self, src, ctx, src_mask=None, src_key_padding_mask=None, is_causal=None):
+        src_key_padding_mask = F._canonical_mask(
+            mask=src_key_padding_mask,
+            mask_name="src_key_padding_mask",
+            other_type=F._none_or_dtype(src_mask),
+            other_name="src_mask",
+            target_type=src.dtype
+        )
+
+        src_mask = F._canonical_mask(
+            mask=src_mask,
+            mask_name="src_mask",
+            other_type=None,
+            other_name="",
+            target_type=src.dtype,
+            check_other=False,
+        )
+
+        x = src
+        if self.norm_first:
+            x = x + self._xa_block(self.norm1(x), ctx, src_mask, src_key_padding_mask, is_causal=is_causal)
+            x = x + self._ff_block(self.norm2(x))
+        else:
+            x = self.norm1(x + self._xa_block(x, ctx, src_mask, src_key_padding_mask, is_causal=is_causal))
+            x = self.norm2(x + self._ff_block(x))
+        return x
+
+    def _xa_block(self, x, ctx, attn_mask, key_padding_mask, is_causal=False):
+        x = self.self_attn(ctx, x, x,  # q = ctx, kv = x
+                           attn_mask=attn_mask,
+                           key_padding_mask=key_padding_mask,
+                           need_weights=False, is_causal=is_causal)[0]
+        return self.dropout1(x)
+
+    def _sa_block(self, *args, **kwargs):
+        raise RuntimeError(f"Since this is an instance of {self.__class__.__name__}, cross-attention should be used. Did you mean to use TransformerEncoderLayer?")
 
 class DragonNet(nn.Module):
     """

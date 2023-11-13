@@ -33,8 +33,8 @@ def create_batchdict(batch):
                 with warnings.catch_warnings():
                     warnings.simplefilter("ignore")
                     warnings.warn(
-                        f"Key `{k}` not found -- no logic provided for handling this data. " + \
-                        "You may safely ignore this if this key does not contain values passed directly to the model. " + \
+                        f"Key `{k}` not found -- no logic provided for handling this data. " +
+                        "You may safely ignore this if this key does not contain values passed directly to the model. " +
                         f"Type: {type(v)}"
                     )
     return batchdict
@@ -65,13 +65,9 @@ def collate_padded_play_data_geometric_only(batch):
         "treatment": torch.tensor(batchdict[TREATMENT_KEY], dtype=torch.float),
     }
 
-def collate_padded_play_data_with_carrier_tackler_info(batch):
-    batchdict = create_batchdict(batch)
-    X_geometric = torch.cat([pad_sequence(batchdict[k], batch_first=True, padding_value=PAD_VALUE) for k in GEOMETRIC_KEYS], dim=2)
-    X_ball_carrier = pad_sequence(batchdict["ball_carrier_raw"], batch_first=True, padding_value=PAD_VALUE)
-
-    n_tacklers = torch.tensor([item.size(1) / N_FEATS_PER_PLAYER_PER_TIMESTEP for item in batchdict["tacklers_raw"]], dtype=torch.long)  # Use during forward pass to index correctly in the tackler dimension.
-    tackler_reshaped = [tackler_data.view(tackler_data.size(0), -1, N_FEATS_PER_PLAYER_PER_TIMESTEP) for tackler_data in batchdict["tacklers_raw"]]  # (batch_size, t, n_tacklers, n_feats) -- swap n_tacklers, t
+def pad_tacklers(tackler_list):
+    n_tacklers = torch.tensor([item.size(1) / N_FEATS_PER_PLAYER_PER_TIMESTEP for item in tackler_list], dtype=torch.long)  # Use during forward pass to index correctly in the tackler dimension.
+    tackler_reshaped = [tackler_data.view(tackler_data.size(0), -1, N_FEATS_PER_PLAYER_PER_TIMESTEP) for tackler_data in tackler_list]  # (batch_size, t, n_tacklers, n_feats) -- swap n_tacklers, t
     padded_tacklers = []
     for single_play_data in tackler_reshaped:
         n_tacklers_below_max = max(n_tacklers) - single_play_data.size(1)
@@ -82,7 +78,13 @@ def collate_padded_play_data_with_carrier_tackler_info(batch):
         else:
             padded_tacklers.append(single_play_data)
     X_tacklers = pad_sequence(padded_tacklers, batch_first=True, padding_value=PAD_VALUE)  # finally pad along time axis.
+    return X_tacklers, n_tacklers
 
+def collate_padded_play_data_with_carrier_tackler_info(batch):
+    batchdict = create_batchdict(batch)
+    X_geometric = torch.cat([pad_sequence(batchdict[k], batch_first=True, padding_value=PAD_VALUE) for k in GEOMETRIC_KEYS], dim=2)
+    X_ball_carrier = pad_sequence(batchdict["ball_carrier_raw"], batch_first=True, padding_value=PAD_VALUE)
+    X_tacklers, n_tacklers = pad_tacklers(batchdict["tacklers_raw"])
     X_padded_static = torch.empty((len(batch), 0))
     return {
         "time_series_features": (X_geometric, X_ball_carrier, X_tacklers, n_tacklers),
@@ -92,10 +94,23 @@ def collate_padded_play_data_with_carrier_tackler_info(batch):
     }
     # X_geometric, X_ball_carrier, X_tacklers, n_tacklers = batch
 
+def collate_padded_play_data_with_carrier_tackler_and_raw_info(batch):
+    batchdict = create_batchdict(batch)
+    X_geometric = torch.cat([pad_sequence(batchdict[k], batch_first=True, padding_value=PAD_VALUE) for k in GEOMETRIC_KEYS + RAW_KEYS], dim=2)
+    X_ball_carrier = pad_sequence(batchdict["ball_carrier_raw"], batch_first=True, padding_value=PAD_VALUE)
+    X_tacklers, n_tacklers = pad_tacklers(batchdict["tacklers_raw"])
+    X_padded_static = torch.empty((len(batch), 0))
+    return {
+        "time_series_features": (X_geometric, X_ball_carrier, X_tacklers, n_tacklers),
+        "features": X_padded_static,
+        "target": torch.tensor(batchdict[TARGET_KEY], dtype=torch.float),
+        "treatment": torch.tensor(batchdict[TREATMENT_KEY], dtype=torch.float),
+    }
+
 from dragonnet.models import TransformerRepresentor, MultiLevelTransformerRepresentor
 COLLATE_FN_DICT = {
     TransformerRepresentor.__name__: collate_padded_play_data_geometric_only,
-    MultiLevelTransformerRepresentor.__name__: collate_padded_play_data_with_carrier_tackler_info,
+    MultiLevelTransformerRepresentor.__name__: collate_padded_play_data_with_carrier_tackler_and_raw_info,  # collate_padded_play_data_with_carrier_tackler_info,
 }
 class PlayByPlayDataset(Dataset):
     def __init__(self, path, combine_offense_defense=False):

@@ -1,26 +1,19 @@
-from argparse import ArgumentParser
-import os
-
 import lightning.pytorch as pl
-import lightning.pytorch.callbacks
-from lightning.pytorch.loggers import TensorBoardLogger
 import numpy as np
 from sklearn.metrics import roc_auc_score
 import torch
 import torch.nn.functional as F
 import torch.optim as optim
-from torch.utils.data import DataLoader
 import torchmetrics
-import yaml
+from torchmetrics.aggregation import CatMetric, MeanMetric
+from torchmetrics.regression import MeanAbsoluteError, MeanSquaredError, R2Score
 
-from datasets import PlayByPlayDataset, COLLATE_FN_DICT
 from dragonnet.losses import tarreg_loss
-import dragonnet.models
-from dragonnet.models import DragonNet, TransformerRepresentor
-from utils import get_default_text_spinner_context
 
 np.random.seed(42)
 torch.manual_seed(42)
+
+TRAIN_Y_MEAN = 3.4594572025052197
 class BaseCounterfactualTackleTrainer(pl.LightningModule):
     def __init__(self, model, loss_hparams, optimizer_settings, scheduler_settings=None):
         super().__init__()
@@ -31,7 +24,38 @@ class BaseCounterfactualTackleTrainer(pl.LightningModule):
 
         self.train_auroc = torchmetrics.AUROC(task="binary")
         self.val_auroc = torchmetrics.AUROC(task="binary")
-        self.validation_step_outputs = []  # required for on_validation_epoch_end
+
+        self.test_outputs = []
+
+        self.test_auroc = torchmetrics.AUROC(task="binary")
+        self.t_true_agg = CatMetric()
+        self.y_true_agg = CatMetric()
+        self.y0_pred_agg = CatMetric()
+        self.y1_pred_agg = CatMetric()
+        self.t_pred_agg = CatMetric()
+        self.eps_agg = CatMetric()
+        self.cate_agg = CatMetric()
+
+        self.loss_t_mean = MeanMetric()
+        self.loss_y0_mean = MeanMetric()
+        self.loss_y1_mean = MeanMetric()
+        self.loss_y_overall_mean = MeanMetric()
+        self.loss_total_mean = MeanMetric()
+        self.loss_total_tarreg_mean = MeanMetric()
+        self.tarreg_mean = MeanMetric()
+
+        regression_stack = torchmetrics.MetricCollection({
+            "mae": MeanAbsoluteError(),
+            "mse": MeanSquaredError(),
+            "r2": R2Score(),
+        })
+        self.factual_y0_metrics = regression_stack.clone(prefix="factual_y0_")
+        self.factual_y1_metrics = regression_stack.clone(prefix="factual_y1_")
+        self.factual_metrics = regression_stack.clone(prefix="factual_")
+        self.zero_metrics = regression_stack.clone(prefix="zero_baseline_")
+        self.const_metrics = regression_stack.clone(prefix="const_baseline_")
+
+        self.test_results = None
 
     def training_step(self, batch, batch_idx):
         t_true = batch["treatment"]
@@ -98,6 +122,55 @@ class BaseCounterfactualTackleTrainer(pl.LightningModule):
         else:
             return loss_record["loss_total"]
 
+    def test_step(self, batch, batch_idx):   # this is not very DRY of me...but I don't want to mess up any pytorch-lightning stuff under the hood
+        t_true = batch["treatment"]
+        y_true = batch["target"]
+        y0_pred, y1_pred, t_pred, eps = self.model(batch["time_series_features"])
+        loss_record = tarreg_loss(
+            y_true,
+            t_true,
+            t_pred,
+            y0_pred,
+            y1_pred,
+            eps,
+            alpha=self.loss_hparams["alpha"],
+            beta=self.loss_hparams["beta"]
+        )
+        self.test_auroc.update(t_pred, t_true)
+
+        y0_resid = y_true - y0_pred
+        y1_resid = y_true - y1_pred
+        factual_y0_mae = torch.mean((1 - t_true) * torch.abs(y0_resid))
+        factual_y1_mae = torch.mean(t_true * torch.abs(y1_resid))
+
+        factual_y0_mse = torch.mean((1 - t_true) * torch.square(y0_resid))  # squared yards off on missed tackles
+        factual_y1_mse = torch.mean(t_true * torch.square(y1_resid))  # squared yards off on successful tackles
+
+        p_t = torch.mean(t_true)
+
+        self.t_true_agg.update(t_true)
+        self.y_true_agg.update(y_true)
+        self.y0_pred_agg.update(y0_pred)
+        self.y1_pred_agg.update(y1_pred)
+        self.t_pred_agg.update(t_pred)
+        self.eps_agg.update(eps)
+        self.cate_agg.update(y1_pred - y0_pred)
+
+        self.loss_t_mean.update(loss_record["loss_t"])
+        self.loss_y0_mean.update(loss_record["loss_y0"])
+        self.loss_y1_mean.update(loss_record["loss_y1"])
+        self.loss_y_overall_mean.update(loss_record["loss_y_overall"])
+        self.loss_total_mean.update(loss_record["loss_total"])
+        if "tarreg" in loss_record:
+            self.loss_total_tarreg_mean.update(loss_record["loss_total_tarreg"])
+            self.tarreg_mean.update(loss_record["tarreg"])
+
+        self.factual_y0_metrics.update(y0_pred[t_true == 0], y_true[t_true == 0])
+        self.factual_y1_metrics.update(y1_pred[t_true == 1], y_true[t_true == 1])
+        self.factual_metrics.update((1 - t_true) * y0_pred + t_true * y1_pred, y_true)
+        self.zero_metrics.update(torch.zeros_like(y_true), y_true)
+        self.const_metrics.update(torch.ones_like(y_true) * TRAIN_Y_MEAN, y_true)
+
     def on_train_epoch_end(self):
         self.log("train/t_auroc", self.train_auroc.compute())
         self.train_auroc.reset()
@@ -105,6 +178,35 @@ class BaseCounterfactualTackleTrainer(pl.LightningModule):
     def on_validation_epoch_end(self):
         self.log("val/t_auroc", self.val_auroc.compute())
         self.val_auroc.reset()
+
+    def on_test_epoch_end(self):
+        results_dict = {
+            "t_true": self.t_true_agg.compute(),
+            "y_true": self.y_true_agg.compute(),
+            "y0_pred": self.y0_pred_agg.compute(),
+            "y1_pred": self.y1_pred_agg.compute(),
+            "t_pred": self.t_pred_agg.compute(),
+            "eps": self.eps_agg.compute(),
+            "cate": self.cate_agg.compute(),
+            "t_loss": self.loss_t_mean.compute(),
+            "y0_loss": self.loss_y0_mean.compute(),
+            "y1_loss": self.loss_y1_mean.compute(),
+            "y_loss": self.loss_y_overall_mean.compute(),
+            "loss_total": self.loss_total_mean.compute(),
+            "loss_total_tarreg": self.loss_total_tarreg_mean.compute(),
+            "tarreg": self.tarreg_mean.compute(),
+            "t_auroc": self.test_auroc.compute(),
+        }
+        results_dict.update(
+            **self.factual_y0_metrics.compute(),
+            **self.factual_y1_metrics.compute(),
+            **self.factual_metrics.compute(),
+            **self.zero_metrics.compute(),
+            **self.const_metrics.compute(),
+        )
+        for k, v in results_dict.items():
+            results_dict[k] = v.cpu()
+        self.test_results = results_dict
 
     def configure_optimizers(self):
         optimizer = getattr(optim, self.optimizer_settings["name"])(self.parameters(), **self.optimizer_settings["params"])
@@ -120,77 +222,3 @@ class BaseCounterfactualTackleTrainer(pl.LightningModule):
                     **self.scheduler_settings["lightning_params"],
                 }
             }
-
-def get_callbacks(cfg):
-    return [
-        getattr(lightning.pytorch.callbacks, callback_dict["name"])(**callback_dict["params"])
-        for callback_dict in cfg["callbacks"]
-    ]
-
-DEFAULT_CONFIG_PATH = "./configs/defaults.yaml"
-if __name__ == '__main__':
-    psr = ArgumentParser()
-    psr.add_argument("--config", type=str, help="Config YAML file with experimental settings.")
-    args = psr.parse_args()
-
-    with open(DEFAULT_CONFIG_PATH, "r") as f:
-        cfg = yaml.safe_load(f)
-    if args.config is not None:
-        with open(args.config, "r") as f:
-            run_cfg = yaml.safe_load(f)
-        cfg.update(run_cfg)
-        print("Using configuration file", args.config, f"(overriding {DEFAULT_CONFIG_PATH})")
-    print(yaml.dump(cfg, allow_unicode=True, default_flow_style=False))
-
-    with get_default_text_spinner_context("Initializing model...") as spinner:
-        model_settings = cfg["model_settings"]
-        dragonnet_model = DragonNet(
-            input_dims=model_settings["input_size"],
-            backbone_class=getattr(dragonnet.models, model_settings["representation_class"]),
-            **model_settings.get("model_kwargs", {})
-        )
-        spinner.ok("✅ ")
-
-    with get_default_text_spinner_context("Setting up trainer...") as spinner:
-        logger = TensorBoardLogger(**cfg["logger"])
-        trainer = pl.Trainer(
-            logger=logger,
-            callbacks=get_callbacks(cfg),
-            **cfg["trainer_args"]
-        )
-        wrapped_module = BaseCounterfactualTackleTrainer(
-            dragonnet_model,
-            cfg["loss_hparams"],
-            cfg["optimizer_settings"],
-            scheduler_settings=cfg.get("scheduler_settings", None)
-        )
-        spinner.ok("✅ ")
-
-    dataloaders = {}
-    for split, path in cfg["data"].items():
-        with get_default_text_spinner_context(f"Loading {split} split from {path}...") as spinner:
-            dataset = PlayByPlayDataset(path)
-            dataloaders[split] = DataLoader(
-                dataset,
-                collate_fn=COLLATE_FN_DICT[model_settings["representation_class"]],
-                **cfg["dataloader_settings"],
-            )
-            spinner.ok(f"✅ ({len(dataset)} examples)")
-
-    try:
-        trainer.fit(
-            model=wrapped_module,
-            train_dataloaders=dataloaders["train"],
-            val_dataloaders=dataloaders["val"]
-        )
-    except Exception as e:
-        import traceback
-
-        print("Raised exception", e, "in training")
-        traceback.print_tb(e.__traceback__)
-    finally:
-        with get_default_text_spinner_context("Saving config...") as spinner:
-            final_config_path = os.path.join(logger.log_dir, "config.yml")
-            with open(final_config_path, "w") as f:
-                yaml.dump(cfg, f, default_flow_style=False)
-            spinner.ok(f"✅ (saved at {final_config_path})")

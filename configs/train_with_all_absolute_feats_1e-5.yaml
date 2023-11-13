@@ -1,0 +1,37 @@
+trainer_args:
+  num_sanity_val_steps: 2
+  max_epochs: 100
+  log_every_n_steps: 10
+dataloader_settings:
+  num_workers: 2
+  batch_size: 16
+  persistent_workers: True
+model_settings:
+  representation_class: "MultiLevelTransformerRepresentor"
+  input_size:
+    - 231
+    - 6
+    - 6
+callbacks:
+  - name: "EarlyStopping"
+    params: 
+      monitor: "val/loss_total_tarreg"
+      mode: "min"
+      min_delta: 1.0e-8
+      patience: 5
+      verbose: True
+  - name: "ModelCheckpoint"
+    params:
+      save_top_k: 5
+      monitor: "val/loss_total_tarreg"
+      mode: "min"
+      filename: "model-{epoch:02d}-{val/loss_total_tarreg:.3f}"
+logger:
+  save_dir: "./lightning_logs"
+  name: "dragonnet_baseline"
+  version: "lr_1e-5_absolute_feats+offdef"
+optimizer_settings:
+  name: "Adam"
+  params:
+    lr: 1.0e-5
+  
