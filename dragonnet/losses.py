@@ -41,7 +41,7 @@ def tarreg_loss(y_true, t_true, t_pred, y0_pred, y1_pred, eps, alpha=1.0, beta=1
     -------
     loss: torch.Tensor
     """
-    loss_record = dragonnet_loss(y_true, t_true, t_pred, y0_pred, y1_pred, alpha)
+    loss_record = dragonnet_loss(y_true, t_true, t_pred, y0_pred, y1_pred, eps, alpha=alpha)
     t_pred = (t_pred + 0.01) / 1.02
 
     y_pred = t_true * y1_pred + (1 - t_true) * y0_pred

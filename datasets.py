@@ -18,7 +18,7 @@ TIME_SERIES_KEYS = GEOMETRIC_KEYS + RAW_KEYS + EVENT_KEYS
 
 TARGET_KEY = "yards_after_contact"
 TREATMENT_KEY = "tackle_successful"
-STATIC_KEYS = []  # future: play features and on-field player info
+STATIC_KEYS = ["play_features_encoded"]  # future: play features and on-field player info
 
 
 def create_batchdict(batch):
@@ -46,10 +46,8 @@ def collate_padded_play_data(batch):
     """
     batchdict = create_batchdict(batch)
     X_padded = torch.cat([pad_sequence(batchdict[k], batch_first=True, padding_value=PAD_VALUE) for k in TIME_SERIES_KEYS], dim=2)
-    X_padded_static = torch.empty((len(batch), 0))
     return {
         "time_series_features": X_padded,
-        "features": X_padded_static,
         "target": torch.tensor(batchdict[TARGET_KEY], dtype=torch.float),
         "treatment": torch.tensor(batchdict[TREATMENT_KEY], dtype=torch.float),
     }
@@ -57,10 +55,8 @@ def collate_padded_play_data(batch):
 def collate_padded_play_data_geometric_only(batch):
     batchdict = create_batchdict(batch)
     X_padded = torch.cat([pad_sequence(batchdict[k], batch_first=True, padding_value=PAD_VALUE) for k in GEOMETRIC_KEYS], dim=2)
-    X_padded_static = torch.empty((len(batch), 0))
     return {
         "time_series_features": X_padded,
-        "features": X_padded_static,
         "target": torch.tensor(batchdict[TARGET_KEY], dtype=torch.float),
         "treatment": torch.tensor(batchdict[TREATMENT_KEY], dtype=torch.float),
     }
@@ -85,10 +81,8 @@ def collate_padded_play_data_with_carrier_tackler_info(batch):
     X_geometric = torch.cat([pad_sequence(batchdict[k], batch_first=True, padding_value=PAD_VALUE) for k in GEOMETRIC_KEYS], dim=2)
     X_ball_carrier = pad_sequence(batchdict["ball_carrier_raw"], batch_first=True, padding_value=PAD_VALUE)
     X_tacklers, n_tacklers = pad_tacklers(batchdict["tacklers_raw"])
-    X_padded_static = torch.empty((len(batch), 0))
     return {
         "time_series_features": (X_geometric, X_ball_carrier, X_tacklers, n_tacklers),
-        "features": X_padded_static,
         "target": torch.tensor(batchdict[TARGET_KEY], dtype=torch.float),
         "treatment": torch.tensor(batchdict[TREATMENT_KEY], dtype=torch.float),
     }
@@ -99,7 +93,18 @@ def collate_padded_play_data_with_carrier_tackler_and_raw_info(batch):
     X_geometric = torch.cat([pad_sequence(batchdict[k], batch_first=True, padding_value=PAD_VALUE) for k in GEOMETRIC_KEYS + RAW_KEYS], dim=2)
     X_ball_carrier = pad_sequence(batchdict["ball_carrier_raw"], batch_first=True, padding_value=PAD_VALUE)
     X_tacklers, n_tacklers = pad_tacklers(batchdict["tacklers_raw"])
-    X_padded_static = torch.empty((len(batch), 0))
+    return {
+        "time_series_features": (X_geometric, X_ball_carrier, X_tacklers, n_tacklers),
+        "target": torch.tensor(batchdict[TARGET_KEY], dtype=torch.float),
+        "treatment": torch.tensor(batchdict[TREATMENT_KEY], dtype=torch.float),
+    }
+
+def collate_padded_play_data_with_context(batch):
+    batchdict = create_batchdict(batch)
+    X_geometric = torch.cat([pad_sequence(batchdict[k], batch_first=True, padding_value=PAD_VALUE) for k in GEOMETRIC_KEYS + RAW_KEYS], dim=2)
+    X_ball_carrier = pad_sequence(batchdict["ball_carrier_raw"], batch_first=True, padding_value=PAD_VALUE)
+    X_tacklers, n_tacklers = pad_tacklers(batchdict["tacklers_raw"])
+    #X_padded_static = # TODO: tile in time, then pad_sequence
     return {
         "time_series_features": (X_geometric, X_ball_carrier, X_tacklers, n_tacklers),
         "features": X_padded_static,

@@ -49,18 +49,46 @@ class TransformerRepresentor(nn.Module):
         out_pooled, _ = torch.max(out * ~mask.unsqueeze(-1), dim=1)
         return out_pooled
 
+class TransformerRepresentorWithPlayContext(TransformerRepresentor):
+    def __init__(self, input_dims, play_context_embed_dim=128, cross_attention_heads=8, **kwargs):
+        self.input_dims = input_dims
+        time_series_input_dim, play_context_input_dim = input_dims
+
+        super(TransformerRepresentorWithPlayContext, self).__init__(time_series_input_dim, **kwargs)
+        self.play_context_embed = nn.Linear(play_context_input_dim, play_context_embed_dim)
+        self.xatt = nn.MultiheadAttention(self.output_size, cross_attention_heads, kdim=None, vdim=play_context_embed_dim, batch_first=True)
+
+    def forward(self, X):
+        X_timeseries, X_static = X
+        X_timeseries = X_timeseries.float()
+        X_static = X_static.float()
+
+        mask = (X[..., 0] == PAD_VALUE)
+        out = self.positional_encoder(X)
+        out = self.linear_embed(X)
+        out = self.transformer_encoder(out, src_key_padding_mask=mask)  # dim is (batch_size, time, features)
+        # here, we fuse in static play data -- in collate_fn, should be repeated, then padded
+        attn_mask = (X_static[..., 0] == PAD_VALUE)
+        static_out = self.static_embed(X_static)  # (batch_size, time, features')
+        # call a MHA with static play features as the values (batch_size, time  [tiled], features) and pass in attn_mask
+        final_out = self.xatt(out, out, static_out, src_key_padding_mask=mask, attn_mask=attn_mask)
+
+        out_pooled, _ = torch.max(final_out * ~mask.unsqueeze(-1), dim=1)
+        return out_pooled
+
+
 class MultiLevelTransformerRepresentor(nn.Module):
     def __init__(self,
-        input_dims,
-        geom_embed_dim=128,
-        player_embed_dim=16,
-        geom_n_attention_heads=8,
-        geom_n_encoder_layers=3,
-        ball_carrier_n_attention_heads=8,
-        ball_carrier_n_encoder_layers=3,
-        tackler_n_attention_heads=8,
-        tackler_n_encoder_layers=3,
-    ):
+                 input_dims,
+                 geom_embed_dim=128,
+                 player_embed_dim=16,
+                 geom_n_attention_heads=8,
+                 geom_n_encoder_layers=3,
+                 ball_carrier_n_attention_heads=8,
+                 ball_carrier_n_encoder_layers=3,
+                 tackler_n_attention_heads=8,
+                 tackler_n_encoder_layers=3,
+                 ):
         super(MultiLevelTransformerRepresentor, self).__init__()
         geom_input_dim, ball_carrier_input_dim, tackler_input_dim = input_dims
         self.geom_embed_dim = geom_embed_dim
@@ -115,8 +143,6 @@ class MultiLevelTransformerRepresentor(nn.Module):
 
         return final_out
 
-class TransformerRepresentorWithPlayContext(nn.Module):
-    pass
 
 class PositionalEncoding(nn.Module):
     """

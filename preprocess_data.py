@@ -100,7 +100,9 @@ class NFLBDBDataLoader(object):
                 player_data_for_play = pd.merge(play_groups.first().loc[:, RELEVANT_GAME_INFO], self.players.drop(columns="collegeName"), how="left", on="nflId")
                 player_data_for_play_with_tackles = pd.merge(player_data_for_play, self.tackles, how="left", on=["gameId", "playId", "nflId"])
 
-                # whether there was a successful tackle/forced fumble or a missed tackle, who tackled, and such
+                """
+                    This is the tricky part -- we want the tackle label to correspond to whether
+                """
                 tackle_label = int(player_data_for_play_with_tackles.loc[:, ["pff_missedTackle"]].sum(axis=0).max() == 0)
 
                 # yards after first_contact
@@ -128,6 +130,7 @@ class NFLBDBDataLoader(object):
             }
         self._intermediate = self.tracking_data.groupby(["gameId", "playId"]) \
             .filter(lambda g: ("first_contact" in g["event"].values) and (g.name in self.non_penalty_plays.index) and (g["nflId"].nunique() > 0)) \
+            .groupby(["gameId", "playId"]).filter(NON_SCORING_PLAY) \
             .groupby(["gameId", "playId"]).progress_apply(collect_play_by_play_information)
 
         print("Saving intermediate data to", self.intermediate_data_path, f"({len(self._intermediate)} rows)")

@@ -65,13 +65,13 @@ def get_data_split(split, path, collate_fn, dataloader_settings):
             collate_fn=collate_fn,
             **dataloader_settings,
         )
+        spinner.ok(f"✅ ({len(dataloader.dataset)} examples)")
     return dataloader
 
 def get_dataloaders(data_cfg, collate_fn, dataloader_settings):
     dataloaders = {}
     for split, path in data_cfg.items():
         dataloaders[split] = get_data_split(split, path, collate_fn, dataloader_settings)
-        spinner.ok(f"✅ ({len(dataloaders.dataset)} examples)")
     return dataloaders
 
 if __name__ == '__main__':

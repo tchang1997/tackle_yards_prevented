@@ -1,0 +1,44 @@
+trainer_args:
+  num_sanity_val_steps: 2
+  max_epochs: 100
+  log_every_n_steps: 10
+dataloader_settings:
+  num_workers: 2
+  batch_size: 16
+  persistent_workers: True
+model_settings:
+  representation_class: "MultiLevelTransformerRepresentor"
+  input_size:
+    - 231
+    - 6
+    - 6
+  model_kwargs:
+    geom_n_encoder_layers: 12
+    ball_carrier_n_encoder_layers: 12
+    tackler_n_encoder_layers: 12
+    player_embed_dim: 128
+    geom_embed_dim: 256
+callbacks:
+  - name: "EarlyStopping"
+    params: 
+      monitor: "val/loss_total_tarreg"
+      mode: "min"
+      min_delta: 1.0e-8
+      patience: 10
+      verbose: True
+  - name: "ModelCheckpoint"
+    params:
+      save_top_k: 5
+      monitor: "val/loss_total_tarreg"
+      mode: "min"
+      filename: "model-{epoch:02d}-{val/loss_total_tarreg:.3f}"
+logger:
+  save_dir: "./lightning_logs"
+  name: "dragonnet_baseline"
+  version: "lr_1e-3_12layer_thicc_embeds_wd1e-6"
+optimizer_settings:
+  name: "AdamW"
+  params:
+    lr: 1.0e-3
+    weight_decay: 1.0e-6
+  

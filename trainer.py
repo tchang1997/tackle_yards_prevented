@@ -101,11 +101,11 @@ class BaseCounterfactualTackleTrainer(pl.LightningModule):
 
         y0_resid = y_true - y0_pred
         y1_resid = y_true - y1_pred
-        factual_y0_mae = torch.mean((1 - t_true) * torch.abs(y0_resid))
-        factual_y1_mae = torch.mean(t_true * torch.abs(y1_resid))
+        factual_y0_mae = torch.mean(torch.abs(y0_resid[t_true == 0]))
+        factual_y1_mae = torch.mean(torch.abs(y1_resid[t_true == 1]))
 
-        factual_y0_mse = torch.mean((1 - t_true) * torch.square(y0_resid))  # squared yards off on missed tackles
-        factual_y1_mse = torch.mean(t_true * torch.square(y1_resid))  # squared yards off on successful tackles
+        factual_y0_mse = torch.mean(torch.square(y0_resid[t_true == 0]))  # squared yards off on missed tackles
+        factual_y1_mse = torch.mean(torch.square(y1_resid[t_true == 1]))  # squared yards off on successful tackles
 
         p_t = torch.mean(t_true)
         self.log("val/factual_y0_mae", factual_y0_mae)
@@ -219,6 +219,6 @@ class BaseCounterfactualTackleTrainer(pl.LightningModule):
                 "optimizer": optimizer,
                 "lr_scheduler": {
                     "scheduler": lr_scheduler,
-                    **self.scheduler_settings["lightning_params"],
+                    **self.scheduler_settings["params"],
                 }
             }
