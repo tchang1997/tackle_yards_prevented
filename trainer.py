@@ -8,19 +8,20 @@ import torchmetrics
 from torchmetrics.aggregation import CatMetric, MeanMetric
 from torchmetrics.regression import MeanAbsoluteError, MeanSquaredError, R2Score
 
-from dragonnet.losses import tarreg_loss
+import dragonnet.losses
 
 np.random.seed(42)
 torch.manual_seed(42)
 
 TRAIN_Y_MEAN = 3.4594572025052197
 class BaseCounterfactualTackleTrainer(pl.LightningModule):
-    def __init__(self, model, loss_hparams, optimizer_settings, scheduler_settings=None):
+    def __init__(self, model, loss_hparams, optimizer_settings, scheduler_settings=None, loss_fn="tarreg_loss"):
         super().__init__()
         self.model = model
         self.loss_hparams = loss_hparams
         self.optimizer_settings = optimizer_settings
         self.scheduler_settings = scheduler_settings
+        self.loss_fn = getattr(dragonnet.losses, loss_fn)
 
         self.train_auroc = torchmetrics.AUROC(task="binary")
         self.val_auroc = torchmetrics.AUROC(task="binary")
@@ -62,7 +63,7 @@ class BaseCounterfactualTackleTrainer(pl.LightningModule):
         y_true = batch["target"]
 
         y0_pred, y1_pred, t_pred, eps = self.model(batch["time_series_features"])
-        loss_record = tarreg_loss(
+        loss_record = self.loss_fn(
             y_true,
             t_true,
             t_pred,
@@ -85,7 +86,7 @@ class BaseCounterfactualTackleTrainer(pl.LightningModule):
         t_true = batch["treatment"]
         y_true = batch["target"]
         y0_pred, y1_pred, t_pred, eps = self.model(batch["time_series_features"])
-        loss_record = tarreg_loss(
+        loss_record = self.loss_fn(
             y_true,
             t_true,
             t_pred,
@@ -126,7 +127,7 @@ class BaseCounterfactualTackleTrainer(pl.LightningModule):
         t_true = batch["treatment"]
         y_true = batch["target"]
         y0_pred, y1_pred, t_pred, eps = self.model(batch["time_series_features"])
-        loss_record = tarreg_loss(
+        loss_record = self.loss_fn(
             y_true,
             t_true,
             t_pred,
@@ -209,9 +210,9 @@ class BaseCounterfactualTackleTrainer(pl.LightningModule):
         self.test_results = results_dict
 
     def configure_optimizers(self):
-        optimizer = getattr(optim, self.optimizer_settings["name"])(self.parameters(), **self.optimizer_settings["params"])
+        requires_grad_params = filter(lambda p: p.requires_grad, self.parameters())
+        optimizer = getattr(optim, self.optimizer_settings["name"])(requires_grad_params, **self.optimizer_settings["params"])
         if self.scheduler_settings is None:
-            # default: Adam with lr 1e-4
             return optimizer
         else:
             lr_scheduler = getattr(optim.lr_scheduler, self.scheduler_settings["name"])(optimizer, **self.scheduler_settings["params"])

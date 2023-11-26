@@ -4,7 +4,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from datasets import PAD_VALUE
+from datasets import PAD_VALUE, N_FEATS_PER_PLAYER_PER_TIMESTEP, N_GEOMETRIC_FEATS, N_OFFENSE, N_DEFENSE
 
 class OutcomeRegressor(nn.Module):
     def __init__(self, shared_dim, outcome_hidden):
@@ -31,10 +31,26 @@ class PropensityModel(nn.Module):
         eps = self.epsilon(torch.ones(t_pred.size(0), device=self.epsilon.weight.device).unsqueeze(-1))
         return t_pred.squeeze(-1), eps.squeeze(-1)
 
+class NonLinearPropensityModel(nn.Module):
+    def __init__(self, shared_dim, hidden_dim=100):
+        super(NonLinearPropensityModel, self).__init__()
+        self.hidden = nn.Linear(in_features=shared_dim, out_features=hidden_dim)
+        self.treat_out = nn.Linear(in_features=hidden_dim, out_features=1)
+        self.epsilon = nn.Linear(in_features=1, out_features=1)
+        torch.nn.init.xavier_normal_(self.epsilon.weight)  # this is just a trainable scalar parameter used for the targeted regularization
+
+    def forward(self, Z):
+        out = self.hidden(Z)
+        out = self.treat_out(out)
+        t_pred = torch.sigmoid(out)
+        eps = self.epsilon(torch.ones(t_pred.size(0), device=self.epsilon.weight.device).unsqueeze(-1))
+        return t_pred.squeeze(-1), eps.squeeze(-1)
+
+
 class TransformerRepresentor(nn.Module):
     def __init__(self, input_dim, embed_dim=128, n_attention_heads=8, n_encoder_layers=3):
         super(TransformerRepresentor, self).__init__()
-        self.positional_encoder = PositionalEncoding(input_dim)
+        self.positional_encoder = PositionalEncoding(embed_dim)
         self.linear_embed = nn.Linear(input_dim, embed_dim)
         encoder_layer = nn.TransformerEncoderLayer(d_model=embed_dim, nhead=n_attention_heads, batch_first=True)
         self.transformer_encoder = nn.TransformerEncoder(encoder_layer, num_layers=n_encoder_layers)
@@ -43,8 +59,8 @@ class TransformerRepresentor(nn.Module):
     def forward(self, X):
         X = X.float()
         mask = (X[..., 0] == PAD_VALUE)
-        out = self.positional_encoder(X)
         out = self.linear_embed(X)
+        out = self.positional_encoder(out)
         out = self.transformer_encoder(out, src_key_padding_mask=mask)  # dim is (batch_size, time, features)
         out_pooled, _ = torch.max(out * ~mask.unsqueeze(-1), dim=1)
         return out_pooled
@@ -76,6 +92,59 @@ class TransformerRepresentorWithPlayContext(TransformerRepresentor):
         out_pooled, _ = torch.max(final_out * ~mask.unsqueeze(-1), dim=1)
         return out_pooled
 
+class SimplifiedMultiLevelTransformer(nn.Module):
+    def __init__(
+        self,
+        input_dims,
+        geom_embed_dim=128,
+        player_embed_dim=16,
+        geom_n_attention_heads=8,
+        geom_n_encoder_layers=3,
+        ball_carrier_n_attention_heads=8,
+        ball_carrier_n_encoder_layers=3,
+        drop_absolute_x=False,
+        drop_absolute_x_from_all=False,
+    ):
+        super(SimplifiedMultiLevelTransformer, self).__init__()
+        geom_input_dim, ball_carrier_input_dim = input_dims
+        self.geom_embed_dim = geom_embed_dim
+        self.player_embed_dim = player_embed_dim
+        self.input_dims = input_dims
+        self.geometric_transformer = TransformerRepresentor(
+            geom_input_dim,
+            embed_dim=geom_embed_dim,
+            n_attention_heads=geom_n_attention_heads,
+            n_encoder_layers=geom_n_encoder_layers
+        )
+
+        self.ball_carrier_transformer = TransformerRepresentor(
+            ball_carrier_input_dim,
+            embed_dim=player_embed_dim,
+            n_attention_heads=ball_carrier_n_attention_heads,
+            n_encoder_layers=ball_carrier_n_encoder_layers
+        )
+        self.drop_absolute_x = drop_absolute_x
+        self.drop_absolute_x_from_all = drop_absolute_x_from_all
+        self.output_size = geom_embed_dim + player_embed_dim
+
+    def forward(self, batch):
+        if len(batch) == 4:  # HACK: for backward compatibility with old collate functions
+            X_geometric, X_ball_carrier, _, _ = batch
+        else:
+            X_geometric, X_ball_carrier = batch
+        X_geometric = X_geometric.float()
+        X_ball_carrier = X_ball_carrier.float()
+        if self.drop_absolute_x_from_all:
+            n_feats = X_geometric.size(2)
+            raw_feature_start_idx = (N_OFFENSE + N_DEFENSE) * N_GEOMETRIC_FEATS
+            new_indices = (torch.arange(n_feats) < raw_feature_start_idx) | (torch.remainder(torch.arange(n_feats) - raw_feature_start_idx, N_FEATS_PER_PLAYER_PER_TIMESTEP) != 0)
+            X_geometric = X_geometric[:, :, new_indices]
+        if self.drop_absolute_x:
+            X_ball_carrier = X_ball_carrier[:, :, 1:]
+        geometric_out = self.geometric_transformer(X_geometric)
+        ball_carrier_out = self.ball_carrier_transformer(X_ball_carrier)
+        final_out = torch.cat([ball_carrier_out, geometric_out], dim=1)
+        return final_out
 
 class MultiLevelTransformerRepresentor(nn.Module):
     def __init__(self,
@@ -222,11 +291,14 @@ class DragonNet(nn.Module):
     outcome_hidden: int
         layer size for conditional outcome layers
     """
-    def __init__(self, input_dims, backbone_class, outcome_hidden=100, **kwargs):
+    def __init__(self, input_dims, backbone_class, outcome_hidden=100, nonlinear_propensity_model=False, **kwargs):
         super(DragonNet, self).__init__()
         self.backbone = backbone_class(input_dims, **kwargs)
         self.shared_dim = self.backbone.output_size
-        self.propensity_model = PropensityModel(self.shared_dim)
+        if nonlinear_propensity_model:
+            self.propensity_model = NonLinearPropensityModel(self.shared_dim)
+        else:
+            self.propensity_model = PropensityModel(self.shared_dim)
         self.y0_model = OutcomeRegressor(self.shared_dim, outcome_hidden)
         self.y1_model = OutcomeRegressor(self.shared_dim, outcome_hidden)
 

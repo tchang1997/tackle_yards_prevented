@@ -9,6 +9,9 @@ from torch.nn.utils.rnn import pad_sequence
 TACKLER_PAD_VALUE = -2.
 PAD_VALUE = -1.
 N_FEATS_PER_PLAYER_PER_TIMESTEP = 6
+N_GEOMETRIC_FEATS = 5
+N_OFFENSE = 10  # not including the ball carrier
+N_DEFENSE = 11
 
 GEOMETRIC_KEYS = ["offense_geometric", "defense_geometric"]
 RAW_KEYS = ["offense_raw", "defense_raw"]
@@ -33,9 +36,9 @@ def create_batchdict(batch):
                 with warnings.catch_warnings():
                     warnings.simplefilter("ignore")
                     warnings.warn(
-                        f"Key `{k}` not found -- no logic provided for handling this data. " +
-                        "You may safely ignore this if this key does not contain values passed directly to the model. " +
-                        f"Type: {type(v)}"
+                        f"Key `{k}` not found -- no logic provided for handling this data. "
+                        + "You may safely ignore this if this key does not contain values passed directly to the model. "
+                        + f"Type: {type(v)}"
                     )
     return batchdict
 
@@ -88,6 +91,16 @@ def collate_padded_play_data_with_carrier_tackler_info(batch):
     }
     # X_geometric, X_ball_carrier, X_tacklers, n_tacklers = batch
 
+def collate_padded_play_data_with_carrier_info(batch):
+    batchdict = create_batchdict(batch)
+    X_geometric = torch.cat([pad_sequence(batchdict[k], batch_first=True, padding_value=PAD_VALUE) for k in GEOMETRIC_KEYS], dim=2)
+    X_ball_carrier = pad_sequence(batchdict["ball_carrier_raw"], batch_first=True, padding_value=PAD_VALUE)
+    return {
+        "time_series_features": (X_geometric, X_ball_carrier),
+        "target": torch.tensor(batchdict[TARGET_KEY], dtype=torch.float),
+        "treatment": torch.tensor(batchdict[TREATMENT_KEY], dtype=torch.float),
+    }
+
 def collate_padded_play_data_with_carrier_tackler_and_raw_info(batch):
     batchdict = create_batchdict(batch)
     X_geometric = torch.cat([pad_sequence(batchdict[k], batch_first=True, padding_value=PAD_VALUE) for k in GEOMETRIC_KEYS + RAW_KEYS], dim=2)
@@ -104,18 +117,19 @@ def collate_padded_play_data_with_context(batch):
     X_geometric = torch.cat([pad_sequence(batchdict[k], batch_first=True, padding_value=PAD_VALUE) for k in GEOMETRIC_KEYS + RAW_KEYS], dim=2)
     X_ball_carrier = pad_sequence(batchdict["ball_carrier_raw"], batch_first=True, padding_value=PAD_VALUE)
     X_tacklers, n_tacklers = pad_tacklers(batchdict["tacklers_raw"])
-    #X_padded_static = # TODO: tile in time, then pad_sequence
+    # X_padded_static = # TODO: tile in time, then pad_sequence
     return {
         "time_series_features": (X_geometric, X_ball_carrier, X_tacklers, n_tacklers),
-        "features": X_padded_static,
+        "features": None,  # TODO: X_padded_static
         "target": torch.tensor(batchdict[TARGET_KEY], dtype=torch.float),
         "treatment": torch.tensor(batchdict[TREATMENT_KEY], dtype=torch.float),
     }
 
-from dragonnet.models import TransformerRepresentor, MultiLevelTransformerRepresentor
+from dragonnet.models import TransformerRepresentor, MultiLevelTransformerRepresentor, SimplifiedMultiLevelTransformer
 COLLATE_FN_DICT = {
     TransformerRepresentor.__name__: collate_padded_play_data_geometric_only,
     MultiLevelTransformerRepresentor.__name__: collate_padded_play_data_with_carrier_tackler_and_raw_info,  # collate_padded_play_data_with_carrier_tackler_info,
+    SimplifiedMultiLevelTransformer.__name__: collate_padded_play_data_with_carrier_tackler_and_raw_info,
 }
 class PlayByPlayDataset(Dataset):
     def __init__(self, path, combine_offense_defense=False):

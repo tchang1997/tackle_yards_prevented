@@ -7,7 +7,7 @@ dataloader_settings:
   batch_size: 16
   persistent_workers: True
 model_settings:
-  representation_class: "MultiLevelTransformerRepresentor"
+  representation_class: "SimplifiedMultiLevelTransformer"
   input_size:
     - 231
     - 6
@@ -15,9 +15,9 @@ model_settings:
   model_kwargs:
     geom_n_encoder_layers: 12
     ball_carrier_n_encoder_layers: 12
-    tackler_n_encoder_layers: 12
     player_embed_dim: 128
     geom_embed_dim: 256
+    drop_absolute_x: True
 callbacks:
   - name: "EarlyStopping"
     params: 
@@ -35,7 +35,7 @@ callbacks:
 logger:
   save_dir: "./lightning_logs"
   name: "dragonnet_baseline"
-  version: "12layer_sgd1e-6_wd1e-4_explr0.8_newdata"
+  version: "12layer_simpler_nox_sgd1e-6_wd1e-4_explr0.8_newdata"
 optimizer_settings:
   name: "SGD"
   params:

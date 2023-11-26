@@ -7,15 +7,23 @@ from lightning.pytorch.loggers import TensorBoardLogger
 from torch.utils.data import DataLoader
 import yaml
 
+import callbacks
 from datasets import PlayByPlayDataset, COLLATE_FN_DICT
 import dragonnet.models
 from dragonnet.models import DragonNet, TransformerRepresentor
 from trainer import BaseCounterfactualTackleTrainer
 from utils import get_default_text_spinner_context
 
+CALLBACK_MODULES = [lightning.pytorch.callbacks, callbacks]
 def get_callbacks(cfg):
+    def search_callback(name):
+        for module in CALLBACK_MODULES:
+            if hasattr(module, name):
+                return getattr(module, name)
+        raise AttributeError(f"No callback {name} found in modules: {CALLBACK_MODULES}")
+
     return [
-        getattr(lightning.pytorch.callbacks, callback_dict["name"])(**callback_dict["params"])
+        search_callback(callback_dict["name"])(**callback_dict["params"])
         for callback_dict in cfg["callbacks"]
     ]
 

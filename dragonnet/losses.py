@@ -1,10 +1,17 @@
 import torch
 import torch.nn.functional as F
 
+def nednet_loss(y_true, t_true, t_pred, y0_pred, y1_pred, eps, **kwargs):  # same func signature for backward compat
+    loss_record = {}
+    t_pred = (t_pred + 0.01) / 1.02
+    loss_record["loss_t"] = torch.sum(F.binary_cross_entropy(t_pred, t_true, reduction='none'))
+    loss_record["loss_total"] = loss_record["loss_t"]
+    return loss_record
+
 def dragonnet_loss(y_true, t_true, t_pred, y0_pred, y1_pred, eps, alpha=1.0):
     loss_record = {}
     t_pred = (t_pred + 0.01) / 1.02
-    loss_record["loss_t"] = torch.sum(F.binary_cross_entropy(t_pred, t_true))
+    loss_record["loss_t"] = torch.sum(F.binary_cross_entropy(t_pred, t_true, reduction='none'))
 
     loss_record["loss_y0"] = torch.sum((1. - t_true) * torch.square(y_true - y0_pred))
     loss_record["loss_y1"] = torch.sum(t_true * torch.square(y_true - y1_pred))

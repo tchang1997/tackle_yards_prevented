@@ -10,7 +10,8 @@ from tqdm.auto import tqdm
 tqdm.pandas()
 
 # TODO: put these constants in a YAML file
-PLAYS_RELEVANT_COLS = ['ballCarrierId', 'ballCarrierDisplayName', 'quarter', 'down', 'yardsToGo', 'possessionTeam', 'defensiveTeam', 'yardlineSide', 'yardlineNumber', 'gameClock',
+PLAYS_RELEVANT_COLS = [
+    'ballCarrierId', 'ballCarrierDisplayName', 'quarter', 'down', 'yardsToGo', 'possessionTeam', 'defensiveTeam', 'yardlineSide', 'yardlineNumber', 'gameClock',
     'preSnapHomeScore', 'preSnapVisitorScore', 'passResult', 'absoluteYardlineNumber', 'prePenaltyPlayResult', 'playResult', 'offenseFormation', 'defendersInTheBox', 'passProbability']
 RELEVANT_EVENTS = ["first_contact", "ball_snap", "pass_outcome_caught", "handoff", "pass_arrived", "out_of_bounds", "run", "man_in_motion", "play_action", "touchdown", "fumble"]
 RELEVANT_GAME_INFO = ["gameId", "playId", "displayName", "time", "club"]
@@ -18,6 +19,8 @@ RELEVANT_PLAYER_PLAY_INFO = ["x", "y", "s", "a", "o", "dir"]
 YARDAGE_BINS = [0, 3, 7, 10, 100]
 YARDAGE_CATEGORIES = ["short", "medium", "long", "very_long"]
 DEFENDERS_IN_BOX_BINS = [0, 4, 5, 6, 7, 8, 12]
+TACKLE_TOLERANCE = 2
+
 class NFLBDBDataLoader(object):
     def __init__(self, base_path="./data/nfl-big-data-bowl-2024", weeks=[1, 2, 3, 4, 5, 6, 7, 8, 9]):
 
@@ -36,8 +39,10 @@ class NFLBDBDataLoader(object):
         self.tackles = pd.read_csv(os.path.join(base_path, "tackles.csv"))
 
         play_not_nullified_by_penalty = (self.plays['playNullifiedByPenalty'] != "Y")
+        non_scoring_play = ~self.plays["playDescription"].str.contains("TOUCHDOWN")
+
         full_play_cols = PLAYS_RELEVANT_COLS + ['gameId', 'playId']
-        self.non_penalty_plays = pd.merge(self.plays.loc[play_not_nullified_by_penalty, full_play_cols], self.games, how="inner", on="gameId") \
+        self.non_penalty_plays = pd.merge(self.plays.loc[play_not_nullified_by_penalty & non_scoring_play, full_play_cols], self.games, how="inner", on="gameId") \
             .drop(columns=["homeFinalScore", "visitorFinalScore"]).set_index(["gameId", "playId"])
 
         self.base_path = base_path
@@ -101,15 +106,27 @@ class NFLBDBDataLoader(object):
                 player_data_for_play_with_tackles = pd.merge(player_data_for_play, self.tackles, how="left", on=["gameId", "playId", "nflId"])
 
                 """
-                    This is the tricky part -- we want the tackle label to correspond to whether
-                """
-                tackle_label = int(player_data_for_play_with_tackles.loc[:, ["pff_missedTackle"]].sum(axis=0).max() == 0)
+                    This is the tricky part -- we want the tackle label to correspond to whether an instance of first contact led to a tackle.
+                    That first contact might have led to a missed tackle, or it may have been the contact that led to a tackle.
 
-                # yards after first_contact
+                    Therefore, we define the label such that a first contact resulted in a successful tackle if any of the individuals credited for
+                    the tackle were within 2 yards of the ball carrier. This is a conservative threshold to account for some measurement error in the
+                    tracking data.
+                """
                 play_features = self.non_penalty_plays.loc[(game_id, play_id), PLAYS_RELEVANT_COLS]
+                ball_carrier_trajectory = play_timeseries.xs(play_features.ballCarrierId, axis=1)
+                carrier_xy = ball_carrier_trajectory.loc[time_to_first_contact, ["x", "y"]]
+
+                tacklers = player_data_for_play_with_tackles.loc[(player_data_for_play_with_tackles["tackle"] + player_data_for_play_with_tackles["assist"]) > 0, "nflId"].tolist()
+                tackle_label = 0
+                for tackler_id in tacklers:
+                    tackler_xy = play_timeseries.xs(tackler_id, axis=1).loc[time_to_first_contact, ["x", "y"]]
+                    if np.linalg.norm(tackler_xy - carrier_xy) <= 2:
+                        tackle_label = 1
+                # tackle_label = int(player_data_for_play_with_tackles.loc[:, ["pff_missedTackle"]].sum(axis=0).max() == 0)
+
                 # play_features_with_game_data = pd.merge(play_features, self.games, how="left", on="gameId")
                 direction = 2 * int(first_group["playDirection"].iloc[0] == "right") - 1
-                ball_carrier_trajectory = play_timeseries.xs(play_features.ballCarrierId, axis=1)
                 yds_at_first_contact = ball_carrier_trajectory.loc[time_to_first_contact, "x"]
                 yds_final = ball_carrier_trajectory.loc[len(ball_carrier_trajectory) - 1, "x"]
                 outcome = direction * (yds_final - yds_at_first_contact)
@@ -130,7 +147,6 @@ class NFLBDBDataLoader(object):
             }
         self._intermediate = self.tracking_data.groupby(["gameId", "playId"]) \
             .filter(lambda g: ("first_contact" in g["event"].values) and (g.name in self.non_penalty_plays.index) and (g["nflId"].nunique() > 0)) \
-            .groupby(["gameId", "playId"]).filter(NON_SCORING_PLAY) \
             .groupby(["gameId", "playId"]).progress_apply(collect_play_by_play_information)
 
         print("Saving intermediate data to", self.intermediate_data_path, f"({len(self._intermediate)} rows)")
