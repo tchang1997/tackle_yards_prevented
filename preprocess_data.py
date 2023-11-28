@@ -168,18 +168,18 @@ class NFLBDBDataLoader(object):
 
             player_speed = group_.loc[:, 's']
             ball_carrier_speed = ball_carrier_tracking_data.loc[:, 's']
-            rel_spd = np.sqrt(player_speed ** 2 + ball_carrier_speed ** 2 - 2 * player_speed * ball_carrier_speed * np.cos(delta_angle))
+            rel_spd = np.sqrt(player_speed ** 2 + ball_carrier_speed ** 2 - 2 * player_speed * ball_carrier_speed * np.cos(delta_angle * np.pi / 180))
 
             player_accel = group_.loc[:, 'a']
             ball_carrier_accel = ball_carrier_tracking_data.loc[:, 'a']
-            rel_accel = np.sqrt(player_accel ** 2 + ball_carrier_accel ** 2 - 2 * player_accel * ball_carrier_accel * np.cos(delta_angle))
+            rel_accel = np.sqrt(player_accel ** 2 + ball_carrier_accel ** 2 - 2 * player_accel * ball_carrier_accel * np.cos(delta_angle * np.pi / 180))
 
             return pd.DataFrame({
                 "distance": dist,
                 "relative_speed": rel_spd,
                 "relative_acceleration": rel_accel,
                 "delta_angle": delta_angle,
-                "cosine_similarity": np.cos(delta_angle),
+                "cosine_similarity": np.cos(delta_angle * np.pi / 180),
             })
 
         final_features = []

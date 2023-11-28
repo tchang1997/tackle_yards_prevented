@@ -1,6 +1,6 @@
 data/
 .ipynb_checkpoints/
 __pycache__/
-lightning_logs/
-animations/*.html
+*lightning_logs/
+animation/animations/*.html
 tensorboard_logs/

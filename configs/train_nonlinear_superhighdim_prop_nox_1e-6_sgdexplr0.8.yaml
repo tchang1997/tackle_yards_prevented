@@ -14,8 +14,8 @@ model_settings:
   model_kwargs:
     geom_n_encoder_layers: 12
     ball_carrier_n_encoder_layers: 12
-    player_embed_dim: 128
-    geom_embed_dim: 512
+    player_embed_dim: 768
+    geom_embed_dim: 768
     drop_absolute_x: True
     nonlinear_propensity_model: True
 callbacks:
@@ -35,7 +35,7 @@ callbacks:
 logger:
   save_dir: "./lightning_logs"
   name: "dragonnet_baseline"
-  version: "nonlinear_nox_highdim_sgd1e-6_wd1e-4_explr0.8"
+  version: "nonlinear_nox_superhighdim_sgd1e-6_wd1e-4_explr0.8"
 optimizer_settings:
   name: "SGD"
   params:

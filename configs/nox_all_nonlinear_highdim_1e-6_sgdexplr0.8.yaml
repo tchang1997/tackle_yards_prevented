@@ -9,7 +9,7 @@ dataloader_settings:
 model_settings:
   representation_class: "SimplifiedMultiLevelTransformer"
   input_size:
-    - 231
+    - 210
     - 5
   model_kwargs:
     geom_n_encoder_layers: 12
@@ -17,6 +17,7 @@ model_settings:
     player_embed_dim: 128
     geom_embed_dim: 512
     drop_absolute_x: True
+    drop_absolute_x_from_all: True
     nonlinear_propensity_model: True
 callbacks:
   - name: "EarlyStopping"
@@ -35,7 +36,7 @@ callbacks:
 logger:
   save_dir: "./lightning_logs"
   name: "dragonnet_baseline"
-  version: "nonlinear_nox_highdim_sgd1e-6_wd1e-4_explr0.8"
+  version: "nonlinear_nox_all_highdim_sgd1e-6_wd1e-4_explr0.8"
 optimizer_settings:
   name: "SGD"
   params:
