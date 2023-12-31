@@ -2,5 +2,7 @@ data/
 .ipynb_checkpoints/
 __pycache__/
 *lightning_logs/
-animation/animations/*.html
+animation/animations/
 tensorboard_logs/
+
+.DS_Store

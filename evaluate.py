@@ -63,7 +63,7 @@ if __name__ == '__main__':
     test_results = trainer.model.test_results
     report_on_results(test_results)
 
-    save_path = os.path.join(args.ckpt_path, "results.pkl")
+    save_path = os.path.join(args.ckpt_path, f"{args.split}_results.pkl")
     with open(save_path, "wb") as f:
         pickle.dump(test_results, f)
         print("Saved evaluation results to", save_path)

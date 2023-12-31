@@ -1,11 +1,14 @@
 # adapted from https://www.kaggle.com/code/huntingdata11/animated-and-interactive-nfl-plays-in-plotly
 # Special thanks to Hunter Kempf for making his visualization code publicly available, which this is directly based on.
 from argparse import ArgumentParser
+import io
 import os
 import pickle
 
+from moviepy.editor import ImageSequenceClip
 import numpy as np
 import pandas as pd
+from PIL import Image
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 from tqdm.auto import tqdm
@@ -106,8 +109,25 @@ def initialize_buffer(extra_keys=[]):
     return {k: [] for k in keys}
 
 
-def animate_play(tracking_df, game_df, play_df, tackle_df, players, gameId, playId, y0, y1, t, y, multiplot=False, animation_dir="../animations/"):
-    anim_path = os.path.join(animation_dir, f'GAME{gameId}_PLAY{playId}.html')
+def animate_play(
+    tracking_df,
+    game_df,
+    play_df,
+    tackle_df,
+    players,
+    gameId,
+    playId,
+    y0,
+    y1,
+    t,
+    y,
+    multiplot=False,
+    animation_dir="../animations/",
+    format="html",
+    fps=20,
+    bitrate=None,
+):
+    anim_path = os.path.join(animation_dir, f'GAME{gameId}_PLAY{playId}.{format}')
     selected_game_df = game_df[game_df.gameId == gameId]
     selected_play_df = play_df[(play_df.playId == playId) & (play_df.gameId == gameId)]
 
@@ -263,20 +283,43 @@ def animate_play(tracking_df, game_df, play_df, tackle_df, players, gameId, play
     date = selected_game_df.gameDate.values[0]
     layout = get_layout(week, date, homeTeam, awayTeam, gameId, playId, playDescription, slider_dict, y0, y1, t, y, tmax=len(frames), scale=10, multiplot=multiplot)
     fig = go.Figure(data=frames[0]["data"], layout=layout, frames=frames[1:])
-    # Create First Down Markers
-    add_first_down_markers(fig, line_of_scrimmage, down)
-    add_end_zone_text(fig, homeTeam, awayTeam, possessionTeam, play_direction_sign)
-    add_scoreline(
-        fig,
-        gameClock, quarter, down,
-        yardsToGo, yardlineSide, yardlineNumber,
-        possessionTeam,
-        homeScore, awayScore,
-        homeTeam, awayTeam
-    )
+
     if multiplot:
         add_subplot_titles(fig)
-    fig.write_html(anim_path)
+    if format == "html":
+        add_first_down_markers(fig, line_of_scrimmage, down)
+        add_end_zone_text(fig, homeTeam, awayTeam, possessionTeam, play_direction_sign)
+        add_scoreline(
+            fig,
+            gameClock, quarter, down,
+            yardsToGo, yardlineSide, yardlineNumber,
+            possessionTeam,
+            homeScore, awayScore,
+            homeTeam, awayTeam
+        )
+        fig.write_html(anim_path)
+    elif format == "mp4":
+        image_arr = []
+        for frame in tqdm(frames, desc="Writing video"):
+            fig = go.Figure(frame["data"], layout=layout)
+            add_first_down_markers(fig, line_of_scrimmage, down)
+            add_end_zone_text(fig, homeTeam, awayTeam, possessionTeam, play_direction_sign)
+            add_scoreline(
+                fig,
+                gameClock, quarter, down,
+                yardsToGo, yardlineSide, yardlineNumber,
+                possessionTeam,
+                homeScore, awayScore,
+                homeTeam, awayTeam
+            )
+            fig_bytes = fig.to_image(format="png")
+            buf = io.BytesIO(fig_bytes)
+            img = Image.open(buf)
+            image_arr.append(np.asarray(img))
+        clip = ImageSequenceClip(image_arr, fps=fps)
+        clip.write_videofile(anim_path, fps=fps, codec="libx264", bitrate=bitrate)
+    else:
+        raise ValueError()
     print("Saved animation to", anim_path)
     return fig
 
@@ -287,13 +330,16 @@ if __name__ == '__main__':
     psr.add_argument("--split", type=str, choices=["train", "val", "test"], default="val")
     psr.add_argument("--animation-dir", type=str, default="animation/animations/")
     psr.add_argument("--multiplot", action="store_true")
+    psr.add_argument("--format", type=str, choices=["html", "mp4"], default="html")
+    psr.add_argument("--fps", type=int, default=15)
+    psr.add_argument("--bitrate", type=int)
     args = psr.parse_args()
 
     raw_data = NFLBDBDataLoader()  # load data
     path = os.path.join(raw_data.base_path, f"play_by_play_{args.split}.pkl")
     dataset = PlayByPlayDataset(path)
 
-    model_results = pickle.load(open(f"{args.ckpt_dir}/results.pkl", "rb"))
+    model_results = pickle.load(open(f"{args.ckpt_dir}/{args.split}_results.pkl", "rb"))
 
     for n_play, i in enumerate(args.indices):
         print(f"Animating play {args.split}:{i} ({n_play + 1}/{len(args.indices)})")
@@ -314,4 +360,7 @@ if __name__ == '__main__':
             model_results["y_true"][i],
             animation_dir=args.animation_dir,
             multiplot=args.multiplot,
+            format=args.format,
+            fps=args.fps,
+            bitrate=str(args.bitrate),
         )

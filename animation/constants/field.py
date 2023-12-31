@@ -6,7 +6,7 @@ X_AWAY_GOAL_LINE = 110
 X_AWAY_ENDZONE = 120
 X_NUMBER_SPACING = 10
 X_N_NUMBERS = 9
-YARD_NUMBERS = list(map(str, list(np.arange(10, 50, X_NUMBER_SPACING)) + list(np.arange(40, 9, -X_NUMBER_SPACING))))
+YARD_NUMBERS = list(map(str, list(np.arange(10, 51, X_NUMBER_SPACING)) + list(np.arange(40, 9, -X_NUMBER_SPACING))))
 
 Y_BOTTOM_SIDELINE = 0
 Y_TOP_SIDELINE = 53.5
